@@ -180,6 +180,6 @@ cache/*.
 assets/videos/*
 assets/streams/*
 dependencies/
-src/logs
+src/logs/*
 src/backup/*
 !src/backup/.keep

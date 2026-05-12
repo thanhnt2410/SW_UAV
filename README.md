@@ -2,9 +2,9 @@
 
 ## Hardware requirements:
 
-Ubuntu 20.04 with minimum 16GB RAM and 60GB available ROM, and external GPU (optional)
+Ubuntu 22.04 with minimum 16GB RAM and 60GB available ROM, and external GPU (optional)
 
-ROS-Noetic / ROS-Foxy
+ROS2-Humble and python 3.10
 
 ## Setups:
 
@@ -84,6 +84,7 @@ pip install mavsdk asyncio --force
 ### 1. Run all:
 
 ```
+export QT_XCB_GL_INTEGRATION=none  #avoid crash
 python src/main.py
 ```
 
@@ -97,8 +98,7 @@ python src/app.py
 python src/interface_base.py
 ```
 
-      ```
-
+```
 python src/interface_map.py
 
 ```
