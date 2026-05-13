@@ -182,4 +182,5 @@ assets/streams/*
 dependencies/
 src/logs/*
 src/backup/*
+src/data/parameters/*
 !src/backup/.keep
