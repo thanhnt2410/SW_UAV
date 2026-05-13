@@ -367,10 +367,7 @@ def split_grids(rotated_area, angle, midpoint, min_lat, min_lon, grid_size, n_ar
 
         # Convert the vertices back to a list of tuples
         points = [tuple(point) for point in hull_vertices]
-
-        #HaoNV35 Start.
         grid_points = generate_grid(points, int(distance))
-        #HaoNV35 End.
 
         unrotated_area = []
         for point in grid_points:
@@ -546,9 +543,6 @@ def generate_waypoints(area_vertices, grid_size, i):
     print("Generated points: ", points)
     return points
 
-
-
-#HaoNV35 Start.
 def calculate_grid_size():
     uav_num = 5
     h_fov = (90, 90, 100, 100, 100)
@@ -563,7 +557,6 @@ def calculate_grid_size():
         grid_size.append((overlapped_grid_width, overlapped_grid_height))
     # print(grid_size)
     return grid_size
-#HaoNV35 End.
 
 def remove_duplicate_pts(vertices):
     """

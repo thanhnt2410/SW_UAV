@@ -18,6 +18,29 @@ from asyncqt import QEventLoop
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 
+# Patch asyncqt QEventLoop to handle socket objects correctly
+_orig_add_reader = QEventLoop.add_reader
+_orig_add_writer = QEventLoop.add_writer
+_orig_remove_reader = QEventLoop.remove_reader
+_orig_remove_writer = QEventLoop.remove_writer
+
+def _patched_add_reader(self, fd, callback, *args):
+    return _orig_add_reader(self, fd.fileno() if hasattr(fd, 'fileno') else fd, callback, *args)
+
+def _patched_add_writer(self, fd, callback, *args):
+    return _orig_add_writer(self, fd.fileno() if hasattr(fd, 'fileno') else fd, callback, *args)
+
+def _patched_remove_reader(self, fd):
+    return _orig_remove_reader(self, fd.fileno() if hasattr(fd, 'fileno') else fd)
+
+def _patched_remove_writer(self, fd):
+    return _orig_remove_writer(self, fd.fileno() if hasattr(fd, 'fileno') else fd)
+
+QEventLoop.add_reader = _patched_add_reader
+QEventLoop.add_writer = _patched_add_writer
+QEventLoop.remove_reader = _patched_remove_reader
+QEventLoop.remove_writer = _patched_remove_writer
+
 from config.interface_config import *
 from config.stream_config import *
 from config.uav_config import *

@@ -348,9 +348,8 @@ async def uav_fn_goto_location(drone, latitude=None, longitude=None, altitude=No
             
             # Command the UAV to go to the location
             # print(f"UAV-{drone['ID']} going to: {target_lat}, {target_lon}, {target_alt}m")
-            await drone["system"].action.goto_location(target_lat, target_lon, target_alt, 0)
-            await asyncio.sleep(3)
             await drone["system"].action.set_current_speed(4)
+            await drone["system"].action.goto_location(target_lat, target_lon, target_alt, float("nan"))
             break
             
         # Wait for the UAV to reach the target location
@@ -379,25 +378,23 @@ async def _wait_for_location_reached(drone, target_lat, target_lon, target_alt,
     """
     start_time = time.time()
 
-    while time.time() - start_time < timeout:
-        async for position in drone["system"].telemetry.position():
-            current_lat = position.latitude_deg
-            current_lon = position.longitude_deg
-            current_alt = position.absolute_altitude_m             
+    async for position in drone["system"].telemetry.position():
+        current_lat = position.latitude_deg
+        current_lon = position.longitude_deg
+        current_alt = position.absolute_altitude_m             
+    
+        lat_reached = abs(current_lat - target_lat) < tolerance_deg
+        lon_reached = abs(current_lon - target_lon) < tolerance_deg
+        alt_reached = abs(current_alt - target_alt) < tolerance_alt
         
-            lat_reached = abs(current_lat - target_lat) < tolerance_deg
-            lon_reached = abs(current_lon - target_lon) < tolerance_deg
-            alt_reached = abs(current_alt - target_alt) < tolerance_alt
+        if lat_reached and lon_reached and alt_reached:
+            print(f"UAV-{drone['ID']} at {[current_lat, current_lon, current_alt]} reached target location at {[target_lat, target_lon, target_alt]}")
+            return True
             
-            if lat_reached and lon_reached and alt_reached:
-                print(f"UAV-{drone['ID']} at {[current_lat, current_lon, current_alt]} reached target location at {[target_lat, target_lon, target_alt]}")
-                return True
-                
-            # Continue waiting if not reached
-            await asyncio.sleep(0.5)
-            break
+        if time.time() - start_time >= timeout:
+            print(f"UAV-{drone['ID']} timeout reaching location")
+            return False
             
-    print(f"UAV-{drone['ID']} timeout reaching location")
     return False
 
 

@@ -14,7 +14,7 @@ ROOT_DIR = SRC_DIR.parent
 
 # -------------------------------- OPERATION MODE --------------------------------
 # "simulation" for virtual UAVs, "real" for physical hardware
-MODE = "real"  # Options: "simulation" or "real"
+MODE = "simulation"  # Options: "simulation" or "real"
 
 # -------------------------------- UAV ENABLING --------------------------------
 # Enable/disable features for each UAV (True=enabled, False=disabled)
@@ -31,7 +31,7 @@ RESCUE_UAV_INDEX = 6  # Index of the UAV designated for rescue missions
 # Initial positions for all UAVs
 INIT_LON = 8.545594545594  # Initial longitude
 INIT_LAT = 47.397823397823  # Initial latitude
-INIT_ALT = [13, 13, 13, 13, 13, 8]  # Initial altitudes for each UAV (meters)
+INIT_ALT = [13, 13, 13, 13, 13, 13]  # Initial altitudes for each UAV (meters)
 
 # -------------------------------- FLIGHT PARAMETERS --------------------------------
 # Overwrite parameters for each UAV
@@ -72,7 +72,7 @@ OVERWRITE_PARAMS = {
         "RTL_AFTER_MS": True,    # Return to launch after mission
     },
     6: {
-        "MIS_TAKEOFF_ALT": 8,   # Take-off altitude (m)
+        "MIS_TAKEOFF_ALT": 13,   # Take-off altitude (m)
         "MPC_TKO_SPEED": 2,      # Takeoff climb rate (m/s)
         "GND_SPEED_MAX": 3,      # Maximum ground speed (m/s)
         "CURRENT_SPEED": 20,    # Current speed during mission (m/s)
@@ -110,9 +110,9 @@ Connection Format Reference:
 # Configure UAV connection settings based on mode
 if MODE == "simulation":
     # Simulation mode uses UDP connections
-    DEFAULT_PROTOCOL = "udp"
-    DEFAULT_SERVER_HOST = ""
-    DEFAULT_SERVER_PORT = 14541
+    DEFAULT_PROTOCOL = "udpin"
+    DEFAULT_SERVER_HOST = "127.0.0.1"
+    DEFAULT_SERVER_PORT = 14540
     DEFAULT_CLIENT_PORT = 50060
     
     # Generate connection settings for all UAVs

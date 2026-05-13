@@ -248,7 +248,7 @@ if __name__ == "__main__":
     # Start a test server
     test_server = MAVSDKServer(
         id=1,
-        protocol="udp",
+        protocol="udpin",
         server_host="127.0.0.1",
         port=50051,
         bind_port=14540

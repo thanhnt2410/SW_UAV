@@ -966,7 +966,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # Handle the case of arming all available UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
             arm_tasks = [
-                self.uav_arm_callback(i) for i in AVAIL_UAV_INDEXES
+                self.uav_arm_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*arm_tasks)
             return
@@ -1061,7 +1061,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # Handle the case of taking off all available UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
             takeoff_tasks = [
-                self.uav_takeoff_callback(i) for i in AVAIL_UAV_INDEXES
+                self.uav_takeoff_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*takeoff_tasks)
             return
@@ -1172,7 +1172,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # Handle the case of returning all available UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
             return_tasks = [
-                self.uav_return_callback(i, rtl=rtl) for i in AVAIL_UAV_INDEXES
+                self.uav_return_callback(i, rtl=rtl) for i in range(1, MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*return_tasks)
             return
