@@ -1,29 +1,20 @@
+#!/bin/bash
+pkill -f px4
+pkill -f gz
+pkill -f gazebo
+pkill -f ruby
+
 cd ~/PX4-Autopilot
-
-
-
-# Instance 0 - PX4 tự spawn x500_0
-
-PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 \
-
-PX4_GZ_MODEL_POSE="0,0,0.3,0,0,0" \
-
-./build/px4_sitl_default/bin/px4 -i 0 -d &
-
+gnome-terminal -- bash -c "make px4_sitl gz_x500; exec bash"
 sleep 10
-
-
-
-# Instance 1-5 - PX4 tự spawn thêm vào world đang chạy
-
-for i in 1 2 3 4 5; do
-
-    PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 \
-
+for i in {1..5}
+do
+    gnome-terminal -- bash -c "
+    PX4_GZ_STANDALONE=1 \
+    PX4_SYS_AUTOSTART=4001 \
+    PX4_GZ_MODEL=x500 \
     PX4_GZ_MODEL_POSE="$((i*3)),0,0.3,0,0,0" \
-
-    ./build/px4_sitl_default/bin/px4 -i $i -d &
-
-    sleep 5
-
+    ./build/px4_sitl_default/bin/px4 -i $i;
+    sleep 1
+    exec bash"
 done
