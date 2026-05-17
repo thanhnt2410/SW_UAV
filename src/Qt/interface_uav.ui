@@ -8906,7 +8906,7 @@ background-color: rgb(252, 175, 62);</string>
                    </widget>
                   </item>
                   <item>
-                   <widget class="QLineEdit" name="lineEdit_sett_latitude">
+                   <widget class="QLineEdit" name="lineEdit_sett_longitude">
                     <property name="sizePolicy">
                      <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
                       <horstretch>0</horstretch>
@@ -8936,7 +8936,7 @@ background-color: rgb(252, 175, 62);</string>
                    </widget>
                   </item>
                   <item>
-                   <widget class="QLineEdit" name="lineEdit_sett_longitude">
+                   <widget class="QLineEdit" name="lineEdit_sett_latitude">
                     <property name="sizePolicy">
                      <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
                       <horstretch>0</horstretch>
@@ -9120,7 +9120,7 @@ background-color: rgb(252, 175, 62);</string>
                   </property>
                   <property name="url">
                    <url>
-                    <string>file:///home/phgnam-d/Workspace/SwarmUAV-UET/assets/map.html</string>
+                    <string>about:blank</string>
                    </url>
                   </property>
                  </widget>
@@ -11003,7 +11003,7 @@ QPushButton::pressed{background-color: rgb(255, 0, 0);}</string>
             </property>
             <property name="url">
              <url>
-              <string>file:///home/phgnam-d/Workspace/SwarmUAV-UET/assets/map.html</string>
+              <string>about:blank</string>
              </url>
             </property>
             <property name="zoomFactor">

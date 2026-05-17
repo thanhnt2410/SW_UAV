@@ -276,6 +276,7 @@ class Interface(QMainWindow):
             # Set up event handlers
             self._setup_event_handlers()
             
+            self._update_action_buttons_state(self.active_tab_index)
             logger.info("Interface initialization completed successfully")
         except Exception as e:
             logger.error(f"Interface initialization failed: {e}")
@@ -420,6 +421,7 @@ class Interface(QMainWindow):
         self.active_tab_index = index
         self.active_stack_index = self.ui.stackedWidget.currentIndex()
         logger.debug(f"Switched to tab index {index}")
+        self._update_action_buttons_state(index)
 
     def _switch_layout(self, stack_name: str, tab_name: str) -> None:
         """
@@ -445,9 +447,14 @@ class Interface(QMainWindow):
             self.active_stack_index = self.ui.stackedWidget.currentIndex()
             
             logger.debug(f"Switched layout to {stack_name}, {tab_name}")
+            self._update_action_buttons_state(self.active_tab_index)
         except Exception as e:
             logger.error(f"Failed to switch layout: {e}")
             self.popup_msg(str(e), src_msg="_switch_layout", type_msg="error")
+
+    def _update_action_buttons_state(self, tab_index: int) -> None:
+        """Update action buttons based on the selected tab"""
+        pass
 
     # ----------------------------- UI Display Utility Functions -----------------------------
 

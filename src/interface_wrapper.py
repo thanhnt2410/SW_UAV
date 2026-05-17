@@ -121,6 +121,40 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         self.init_application()
         logger.log("Application initialized successfully", level="info")
 
+    def _update_action_buttons_state(self, tab_index: int) -> None:
+        """Update action buttons based on the selected tab"""
+        global UAVs
+        if tab_index in range(1, MAX_UAV_COUNT + 1):
+            is_on_mission = UAVs[tab_index]["status"].get("on_mission", False)
+            if is_on_mission:
+                self._set_pause_button_style("Pause")
+            else:
+                self._set_pause_button_style("Resume")
+        else:
+            self._set_pause_button_style("Pause/Resume")
+
+    def _set_pause_button_style(self, text_state: str) -> None:
+        """Helper to set text and color for Pause/Resume button"""
+        self.ui.btn_pause_resume.setText(text_state)
+        if text_state == "Pause":
+            # Nền màu Vàng/Cam khi UAV đang bay (Nhấn để Pause)
+            self.ui.btn_pause_resume.setStyleSheet(
+                "QPushButton{background-color: rgb(252, 175, 62);}\n"
+                "QPushButton::pressed{background-color: rgb(255, 0, 0);}"
+            )
+        elif text_state == "Resume":
+            # Nền màu Xanh lá khi UAV đang dừng (Nhấn để Resume)
+            self.ui.btn_pause_resume.setStyleSheet(
+                "QPushButton{background-color: rgb(138, 226, 52);}\n"
+                "QPushButton::pressed{background-color: rgb(255, 0, 0);}"
+            )
+        else:
+            # Nền màu Xanh dương mặc định cho Tab All
+            self.ui.btn_pause_resume.setStyleSheet(
+                "QPushButton{background-color: rgb(114, 159, 207);}\n"
+                "QPushButton::pressed{background-color: rgb(255, 0, 0);}"
+            )
+
     # ---------------------------------------------------------
 
     def init_application(self) -> None:
@@ -229,7 +263,6 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.ui.btn_rtl: lambda: self.uav_return_callback(self.active_tab_index, rtl=True),
             self.ui.btn_return: lambda: self.uav_return_callback(self.active_tab_index, rtl=False),
             self.ui.btn_mission: lambda: self.uav_mission_callback(self.active_tab_index),
-            self.ui.btn_push_mission: lambda: self.uav_push_mission_callback(self.active_tab_index),
             self.ui.btn_send_coordinate: lambda: self.send_coordinate() #gui tin nhan
         }
         
@@ -237,6 +270,11 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         for button, callback in button_mappings.items():
             button.clicked.connect(lambda checked=False, cb=callback: asyncio.create_task(cb()))
         
+        # Xử lý riêng nút Push Mission để tránh lỗi kẹt Asyncio Loop với QFileDialog
+        self.ui.btn_push_mission.clicked.connect(
+            lambda: self.uav_push_mission_sync_handler(self.active_tab_index)
+        )
+
         # Connect camera toggle button (non-async)
         self.ui.btn_toggle_camera.clicked.connect(
             lambda: self.uav_toggle_camera_callback(self.active_tab_index)
@@ -281,14 +319,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.uav_get_param_buttons[idx].clicked.connect(create_get_callback(uav_index))
 
     def _connect_goto_buttons(self) -> None:
-        """
-        Connect GoTo navigation buttons for each UAV.
-        
-        This connects the navigation buttons that send UAVs to specific
-        GPS coordinates from the settings or overview pages.
-        """
         # GoTo button mapping for settings and overview pages
-        for uav_index in range(7):  # 0-6 for all UAVs plus all-UAV control
+        for uav_index in range(MAX_UAV_COUNT + 1):  # 0-6 for all UAVs plus all-UAV control
             # Create closures to capture the current UAV index
             def create_goto_settings_callback(uav_idx):
                 return lambda: asyncio.create_task(
@@ -1301,6 +1333,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             # Start new mission
             self.update_terminal(f"[INFO] Sent MISSION command to UAV {uav_index}")
             UAVs[uav_index]["status"]["on_mission"] = True
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Pause")
             
             # Execute mission from plan file
             # await uav_fn_do_mission(
@@ -1319,85 +1353,89 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 await UAVs[uav_index]["system"].action.return_to_launch()
                 clear_mission_logs(uav_index, save_dir=__current_path__)
                 
+            UAVs[uav_index]["status"]["on_mission"] = False
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Resume")
+                
         except Exception as e:
             logger.log(f"Mission error: {repr(e)}", level="error")
             self.popup_msg(
                 f"Error: {repr(e)}", src_msg="uav_mission_callback", type_msg="Error"
             )
             
-    async def uav_push_mission_callback(self, uav_index) -> None:
+    def uav_push_mission_sync_handler(self, uav_index) -> None:
         """
-        Push a mission to a specific UAV or all UAVs.
-        
-        This method uploads a mission from a selected file to the specified UAV(s).
-        It allows the user to select a mission file via a file dialog and then
-        uploads the mission to the UAV.
-        
-        Args:
-            uav_index (int): The UAV to receive the mission (1-MAX_UAV_COUNT),
-                            or 0 for all available UAVs
-            
-        Returns:
-            None
-            
-        Raises:
-            Exception: If there is an error during the mission push process.
-
-        Notes:
-            - Checks the connection status of the UAV.
-            - Reads mission points from a user-selected file.
-            - Uploads the mission and sets return to launch after mission.
-            - Updates the UAV's mode status to 'Mission pushing'.
+        Synchronous handler for Push Mission to prevent QFileDialog from blocking the asyncio event loop.
         """
         global UAVs
         
-        # Handle the case of pushing missions to all available UAVs
+        print(f"\n[DEBUG 1] Button Push Mission clicked! uav_index = {uav_index}")
+
+        # Handle pushing mission to ALL UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
-            # push_tasks = [
-            #     self.uav_push_mission_callback(i) for i in AVAIL_UAV_INDEXES
-            # ]
-            # await asyncio.gather(*push_tasks)
-            return
-        
-        # Skip if UAV is not connected or not allowed
-        if not self._check_uav_connection(uav_index):
-            return
-            
-        try:
-            self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {uav_index}")
-            
-            # Verify mission directory exists
-            if not os.path.exists(plans_log_dir):
-                logger.log(f"Mission directory {plans_log_dir} does not exist", level="warning")
-                os.makedirs(plans_log_dir, exist_ok=True)
-                
-            # Open file dialog to select mission file
             mission_file = QFileDialog.getOpenFileName(
                 parent=self,
-                caption="Select Mission File",
+                caption="Select Mission File for ALL UAVs",
                 directory=str(__current_path__),
-                initialFilter="Text Files (*.TXT *.txt)",
+                filter="Mission Files (*.plan *.txt *.TXT);;All Files (*)",
             )[0]
             
             if not mission_file:
-                logger.log("Mission file selection canceled", level="info")
                 return
                 
-            # Upload mission to UAV
-            logger.log(f"Uploading mission from {mission_file} to UAV {uav_index}", level="info")
+            push_tasks = []
+            for i in range(1, MAX_UAV_COUNT + 1):
+                if self._check_uav_connection(i):
+                    self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
+                    push_tasks.append(
+                        uav_fn_upload_mission(drone=UAVs[i], mission_plan_file=mission_file)
+                    )
+                    UAVs[i]["status"]["mode_status"] = "Mission uploaded"
+                    self._update_uav_info_display(i)
+                    
+            if push_tasks:
+                asyncio.create_task(asyncio.gather(*push_tasks))
+            else:
+                self.popup_msg("No connected UAVs to push mission to.", src_msg="Push Mission", type_msg="Warning")
+            return
+            
+        # Handle pushing mission to SINGLE UAV
+        if not self._check_uav_connection(uav_index):
+            self.popup_msg(f"Please connect UAV {uav_index} first!", src_msg="Push Mission", type_msg="Warning")
+            return
+
+        if not os.path.exists(plans_log_dir):
+            os.makedirs(plans_log_dir, exist_ok=True)
+
+        # Safely open file dialog outside of async context
+        mission_file = QFileDialog.getOpenFileName(
+            parent=self,
+            caption="Select Mission File",
+            directory=str(__current_path__),
+            filter="Mission Files (*.plan *.txt *.TXT);;All Files (*)",
+        )[0]
+        
+        if not mission_file:
+            return
+            
+        # Spawn async task for MAVSDK upload
+        asyncio.create_task(self._async_push_mission(uav_index, mission_file))
+
+    async def _async_push_mission(self, uav_index, mission_file):
+        try:
+            self.update_terminal(f"[INFO] Uploading mission from {mission_file} to UAV {uav_index}")
             await uav_fn_upload_mission(drone=UAVs[uav_index], mission_plan_file=mission_file)
             
+            # 2. Ép con trỏ waypoint bắt đầu từ điểm xuất phát (index 0)
+            await UAVs[uav_index]["system"].mission.set_current_mission_item(0)
+
             # Update status
             UAVs[uav_index]["status"]["mode_status"] = "Mission uploaded"
             self._update_uav_info_display(uav_index)
             
         except Exception as e:
             logger.log(f"Mission push error: {repr(e)}", level="error")
-            self.popup_msg(
-                f"Error pushing mission: {repr(e)}",
-                src_msg="uav_push_mission_callback",
-                type_msg="Error"
-            )
+            self.popup_msg(f"Error pushing mission: {repr(e)}", src_msg="Push Mission", type_msg="Error")
 
     async def uav_toggle_pause_mission_callback(self, uav_index) -> None:
         """
@@ -1438,12 +1476,16 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 await UAVs[uav_index]["system"].mission.pause_mission()
                 UAVs[uav_index]["status"]["on_mission"] = False
                 UAVs[uav_index]["status"]["mode_status"] = "Mission paused"
+                if self.active_tab_index == uav_index:
+                    self._set_pause_button_style("Resume")
             else:
                 # Resume the mission
                 self.update_terminal(f"[INFO] Sent RESUME MISSION command to UAV {uav_index}")
                 await UAVs[uav_index]["system"].mission.start_mission()
                 UAVs[uav_index]["status"]["on_mission"] = True
                 UAVs[uav_index]["status"]["mode_status"] = "Mission active"
+                if self.active_tab_index == uav_index:
+                    self._set_pause_button_style("Pause")
             
             # Update display
             self._update_uav_info_display(uav_index)
@@ -1590,30 +1632,11 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             )
 
     async def uav_goto_callback(self, uav_index, page="settings", *args) -> None:
-        """
-        Command a specific UAV or all UAVs to go to GPS coordinates.
-        
-        This method retrieves GPS coordinates from the specified page's input fields
-        and commands the UAV(s) to fly to those coordinates.
-        
-        Args:
-            uav_index (int): The UAV to command (1-MAX_UAV_COUNT), or 0 for all UAVs
-            page (str): Source page for GPS coordinates ("settings" or "overview")
-            
-        Returns:
-            None
-
-        Notes:
-            - If the longitude or latitude values are empty, default values are used.
-            - The coordinates are updated in the UI fields for both 'settings' and 'overview' pages.
-            - If uav_index is 0, all UAVs will navigate to the specified point concurrently.
-        """
         global UAVs
         
         try:
             # Get coordinates from the appropriate page
             longitude, latitude = self._get_coordinates_from_page(page, uav_index)
-                
             # Ensure coordinates are valid
             if longitude is None or latitude is None:
                 logger.log("Invalid coordinates for goto command", level="warning")
@@ -1632,19 +1655,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 # Skip if UAV is not connected or not allowed
                 if not self._check_uav_connection(uav_index):
                     return
-                    
                 # Send the command
                 self.update_terminal(
-                    f"[INFO] Sent GOTO command to UAV {uav_index}: lat={latitude}, lon={longitude}"
-                )
+                    f"[INFO] Sent GOTO command to UAV {uav_index}: lat={latitude}, lon={longitude}")
                 await uav_fn_goto_location(
-                    drone=UAVs[uav_index], latitude=latitude, longitude=longitude
-                )
-                
+                    drone=UAVs[uav_index], latitude=latitude, longitude=longitude)
                 # Update status
                 UAVs[uav_index]["status"]["mode_status"] = "Going to position"
                 self._update_uav_info_display(uav_index)
-                
             else:
                 # Command all UAVs to go to the same position
                 goto_tasks = []
@@ -2294,6 +2312,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             await UAVs[uav_index]["system"].mission.pause_mission()
             #await UAVs[uav_index]["system"].action.hold()  
             UAVs[uav_index]["detection_enable"] = False 
+            UAVs[uav_index]["status"]["on_mission"] = False
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Resume")
 
             # Get UAV position and frame information
             frame_shape = annotated_frame.shape
@@ -2323,6 +2344,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
 
             await asyncio.sleep(1)
             UAVs[uav_index]["system"].mission.start_mission()
+            UAVs[uav_index]["status"]["on_mission"] = True
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Pause")
             await asyncio.sleep(25)
             UAVs[uav_index]["detection_enable"] = True
 
@@ -2457,6 +2481,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 
                 # 2 UAV Rescue do the rescue mission and the detected drones goes into suspend mode
                 UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = True
+                if self.active_tab_index == RESCUE_UAV_INDEX:
+                    self._set_pause_button_style("Pause")
                 await asyncio.gather(
                     #uav_suspend_missions(drones=detected_uav_list, suspend_time=30),
                     uav_rescue_process(UAVs[RESCUE_UAV_INDEX], rescue_filepath, self)
@@ -2468,6 +2494,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     # ),
                 )
                 UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = False
+                if self.active_tab_index == RESCUE_UAV_INDEX:
+                    self._set_pause_button_style("Resume")
                 UAVs[RESCUE_UAV_INDEX]["rescue_first_time"] = False
                 await asyncio.sleep(15)
                 

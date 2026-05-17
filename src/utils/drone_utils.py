@@ -295,11 +295,6 @@ async def uav_fn_overwrite_params(drone, parameters) -> None:
             parameters.get("RTL_AFTER_MS", False)
         )
         
-        # Set maximum speed
-        await drone["system"].action.set_maximum_speed(
-            parameters.get("GND_SPEED_MAX", 5.0)
-        )
-        
         # Set takeoff altitude
         takeoff_alt = parameters.get("MIS_TAKEOFF_ALT", 10.0)
         await drone["system"].action.set_takeoff_altitude(takeoff_alt)
@@ -321,24 +316,7 @@ async def uav_fn_overwrite_params(drone, parameters) -> None:
 # --------------------- NAVIGATION FUNCTIONS ---------------------
 
 async def uav_fn_goto_location(drone, latitude=None, longitude=None, altitude=None) -> None:
-    """
-    Command UAV to go to a specific GPS location.
-    
-    Args:
-        drone (dict): UAV system dictionary
-        latitude (float, optional): Target latitude in degrees
-                                   If None, current latitude is used
-        longitude (float, optional): Target longitude in degrees
-                                    If None, current longitude is used
-        altitude (float, optional): Target altitude in meters
-                                  If None, current altitude is used
-                                  
-    Note:
-        The function waits until the drone reaches the target location
-        within a small tolerance before returning
-    """
     target_lat, target_lon, target_alt = None, None, None
-    
     try:
         # Get current position if any coordinate is not specified
         async for position in drone["system"].telemetry.position():
@@ -347,23 +325,23 @@ async def uav_fn_goto_location(drone, latitude=None, longitude=None, altitude=No
             target_alt = altitude if altitude is not None else position.absolute_altitude_m
             
             # Command the UAV to go to the location
-            # print(f"UAV-{drone['ID']} going to: {target_lat}, {target_lon}, {target_alt}m")
+            print(f"[DEBUG] UAV-{drone['ID']} initiating GOTO to: lat={target_lat}, lon={target_lon}, alt={target_alt}m")
             await drone["system"].action.set_current_speed(4)
             await drone["system"].action.goto_location(target_lat, target_lon, target_alt, float("nan"))
+            print(f"[DEBUG] UAV-{drone['ID']} goto_location command successfully sent to MAVSDK.")
             break
             
         # Wait for the UAV to reach the target location
-        await _wait_for_location_reached(drone, target_lat, target_lon, target_alt)
+        await _wait_for_location_reached(drone, target_lat, target_lon, target_alt, timeout=60)
             
     except Exception as e:
         print(f"Error in goto_location: {repr(e)}")
 
 
 async def _wait_for_location_reached(drone, target_lat, target_lon, target_alt, 
-                                    tolerance_deg=1e-5, tolerance_alt=0.1, timeout=10):
+                                    tolerance_deg=2e-5, tolerance_alt=1.0, timeout=60):
     """
     Wait for UAV to reach a target location within tolerance.
-    
     Args:
         drone (dict): UAV system dictionary
         target_lat (float): Target latitude in degrees
@@ -372,11 +350,11 @@ async def _wait_for_location_reached(drone, target_lat, target_lon, target_alt,
         tolerance_deg (float): Tolerance for latitude/longitude in degrees
         tolerance_alt (float): Tolerance for altitude in meters
         timeout (int): Maximum wait time in seconds
-        
     Returns:
         bool: True if target reached, False if timeout
     """
     start_time = time.time()
+    last_print_time = start_time
 
     async for position in drone["system"].telemetry.position():
         current_lat = position.latitude_deg
@@ -387,16 +365,19 @@ async def _wait_for_location_reached(drone, target_lat, target_lon, target_alt,
         lon_reached = abs(current_lon - target_lon) < tolerance_deg
         alt_reached = abs(current_alt - target_alt) < tolerance_alt
         
+        # Print debug info every 2 seconds to track progress without flooding console
+        if time.time() - last_print_time >= 2:
+            print(f"[DEBUG] UAV-{drone['ID']} GOTO Tracking - Lat Diff: {abs(current_lat - target_lat):.6f}, "
+                  f"Lon Diff: {abs(current_lon - target_lon):.6f}, Alt Diff: {abs(current_alt - target_alt):.2f}m")
+            last_print_time = time.time()
+            
         if lat_reached and lon_reached and alt_reached:
-            print(f"UAV-{drone['ID']} at {[current_lat, current_lon, current_alt]} reached target location at {[target_lat, target_lon, target_alt]}")
+            print(f"[DEBUG] UAV-{drone['ID']} at {[current_lat, current_lon, current_alt]} successfully REACHED target location.")
             return True
-            
         if time.time() - start_time >= timeout:
-            print(f"UAV-{drone['ID']} timeout reaching location")
-            return False
-            
+            print(f"[DEBUG] UAV-{drone['ID']} GOTO timeout reaching location ({timeout}s)")
+            return False    
     return False
-
 
 async def uav_fn_goto_distance(drone, distance, direction) -> None:
     """
@@ -718,6 +699,7 @@ async def uav_fn_upload_mission(drone, mission_plan_file, verbose=False) -> None
                     camera_action=MissionItem.CameraAction.NONE,
                     camera_photo_distance_m=float("nan"),
                     camera_photo_interval_s=float("nan"),
+                    vehicle_action=MissionItem.VehicleAction.NONE,
                 )
             )
 
