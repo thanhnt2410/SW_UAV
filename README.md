@@ -39,18 +39,6 @@ And check the results by:
 ./swam_uav.sh 
 ```
 
-### 4. [MavSDK Python](https://github.com/mavlink/MAVSDK-Python.git)
-
-```
-bash cmd/setup_mavsdk.sh
-```
-
-### 5. [MavLink Router](https://github.com/intel/mavlink-router.git)
-
-```
-bash cmd/setup_mavrouter.sh
-```
-
 ### 7. [QGroundControl Ground Control Station](https://github.com/mavlink/qgroundcontrol/releases) (Optional)
 
 
