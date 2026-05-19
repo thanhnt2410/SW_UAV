@@ -2,6 +2,7 @@ import asyncio
 import glob
 import os
 import sys
+import yaml
 from datetime import datetime
 
 import cv2
@@ -50,6 +51,12 @@ print(pyfiglet.figlet_format("UAV SWARM CONTROL APP"))
 print("*" * 50)
 print("CURRENT TIME:", __current_time__)
 
+# Load initial UAV positions from YAML config
+# Đường dẫn đến file YAML, thư mục config nằm cùng cấp với src
+INIT_UAVS_POS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "init_pos_uavs.yaml")
+with open(INIT_UAVS_POS_CONFIG_PATH, "r") as f:
+    INITIAL_UAV_POSITIONS = yaml.safe_load(f)
+
 # UAVs object
 try:
     UAVs = {
@@ -72,15 +79,16 @@ try:
             "streaming_enable": streaming_enables[uav_index - 1],
             "detection_enable": detection_enables[uav_index - 1],
             "recording_enable": recording_enables[uav_index - 1],
-            "init_params": {
-                "longitude": INIT_LON,
-                "latitude": INIT_LAT,
+            "init_params": { # Sử dụng tọa độ từ file YAML
+                "longitude": INITIAL_UAV_POSITIONS[f"uav_{uav_index}"]["longitude"],
+                "latitude": INITIAL_UAV_POSITIONS[f"uav_{uav_index}"]["latitude"],
                 "altitude": INIT_ALT[uav_index - 1],
             },
             "status": {
                 "connection_status": False,
                 "streaming_status": False,
                 "on_mission": False,
+                "mission_start_time": "",
                 "arming_status": "No information",
                 "battery_status": "No information",
                 "gps_status": "No information",
@@ -998,7 +1006,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # Handle the case of arming all available UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
             arm_tasks = [
-                self.uav_arm_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_arm_callback(i) for i in AVAIL_UAV_INDEXES
             ]
             await asyncio.gather(*arm_tasks)
             return
@@ -1093,7 +1101,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # Handle the case of taking off all available UAVs
         if uav_index not in range(1, MAX_UAV_COUNT + 1):
             takeoff_tasks = [
-                self.uav_takeoff_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_takeoff_callback(i) for i in AVAIL_UAV_INDEXES
             ]
             await asyncio.gather(*takeoff_tasks)
             return
@@ -1138,11 +1146,25 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             UAVs[uav_index]["status"]["position_status"][1], 12
         )
         
-        # Save to file
-        with open(drone_init_pos_files[uav_index - 1], "w") as f:
-            f.write(
-                f"{UAVs[uav_index]['init_params']['latitude']}, {UAVs[uav_index]['init_params']['longitude']}"
-            )
+        # Save to YAML file
+        yaml_file = INIT_UAVS_POS_CONFIG_PATH # Sử dụng đường dẫn đã định nghĩa ở trên
+        try:
+            data = {}
+            if os.path.exists(yaml_file):
+                with open(yaml_file, "r") as f:
+                    data = yaml.safe_load(f) or {}
+            
+            uav_key = f"uav_{uav_index}"
+            if uav_key not in data:
+                data[uav_key] = {}
+                
+            data[uav_key]["latitude"] = UAVs[uav_index]["init_params"]["latitude"]
+            data[uav_key]["longitude"] = UAVs[uav_index]["init_params"]["longitude"]
+            
+            with open(yaml_file, "w") as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+        except Exception as e:
+            logger.log(f"Failed to save initial position to YAML: {e}", level="error")
 
     async def uav_land_callback(self, uav_index) -> None:
         """
@@ -1333,6 +1355,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             # Start new mission
             self.update_terminal(f"[INFO] Sent MISSION command to UAV {uav_index}")
             UAVs[uav_index]["status"]["on_mission"] = True
+            UAVs[uav_index]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S")
             if self.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
             
@@ -1384,7 +1407,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 return
                 
             push_tasks = []
-            for i in range(1, MAX_UAV_COUNT + 1):
+            for i in AVAIL_UAV_INDEXES:
                 if self._check_uav_connection(i):
                     self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
                     push_tasks.append(
@@ -1882,7 +1905,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 UAVs[uav_index]["status"]["position_status"] = [latitude, longitude]
                 
                 # Update the position in the current position log file
-                self._update_position_log(uav_index, latitude, longitude)
+                self._update_position_log(uav_index, latitude, longitude, alt_msl)
                 
                 # Update the UI
                 self._update_uav_info_display(uav_index)
@@ -1898,7 +1921,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 
         return
     
-    def _update_position_log(self, uav_index, latitude, longitude):
+    def _update_position_log(self, uav_index, latitude, longitude, altitude=0.0):
         """Update the current position log file for the UAV."""
         global UAVs
         try:
@@ -1911,6 +1934,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 
             with open(position_file, "w") as f:
                 f.write(f"{latitude},{longitude}")
+                
+            # Chỉ ghi lịch sử khi UAV đang thực sự trong nhiệm vụ (on_mission == True)
+            if UAVs[uav_index]["status"].get("on_mission", False):
+                mission_time = UAVs[uav_index]["status"].get("mission_start_time", datetime.now().strftime("%Y%m%d"))
+                history_file = position_file.replace(".txt", f"_history_{mission_time}.txt")
+                with open(history_file, "a") as f:
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    f.write(f"{timestamp},{latitude},{longitude},{altitude}\n")
                 
         except Exception as e:
             logger.log(f"Failed to update position log for UAV {uav_index}: {e}", level="warning")
@@ -2433,9 +2464,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 )
 
                 if len(rescue_filepaths) == 0:
-                    logger.log(
-                        f"No rescue position found, re-check rescue directory...", level="info"
-                    )
+                    # logger.log(
+                    #     f"No rescue position found, re-check rescue directory...", level="info"
+                    # )
                     await asyncio.sleep(1)
                     continue
 
@@ -2481,6 +2512,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 
                 # 2 UAV Rescue do the rescue mission and the detected drones goes into suspend mode
                 UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = True
+                UAVs[RESCUE_UAV_INDEX]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S")
                 if self.active_tab_index == RESCUE_UAV_INDEX:
                     self._set_pause_button_style("Pause")
                 await asyncio.gather(

@@ -13,6 +13,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QFileDialog, QMainWindow, QMessageBox
 
+import yaml
 # user-defined modules
 from config.interface_config import *
 from config.stream_config import *
@@ -981,86 +982,58 @@ class Map(Interface):
             self.drone_position_list = []
             self.drone_station_position = None
             
-            # Set the position source directory based on init flag
-            position_dir = (
-                f"{PARENT_DIR}/src/logs/drone_init_pos" if init else
-                f"{PARENT_DIR}/src/logs/drone_current_pos"
-            )
-            
             # Track which drones have been successfully loaded
             loaded_drones = 0
             
+            if init:
+                # Load from centralized YAML config
+                yaml_path = os.path.join(PARENT_DIR, "config", "init_pos_uavs.yaml")
+                try:
+                    with open(yaml_path, "r") as yf:
+                        init_positions = yaml.safe_load(yf) or {}
+                except Exception as e:
+                    logger.warning(f"Could not load YAML config for map: {e}")
+                    init_positions = {}
+            else:
+                position_dir = f"{PARENT_DIR}/src/logs/drone_current_pos"
+
             # Load positions for each drone
             for i in range(self.drone_num):
                 drone_id = i + 1
-                position_file = f"{position_dir}/uav_{drone_id}.txt"
+                lat, lon = None, None
                 
                 try:
-                    # Read position from file
-                    if os.path.exists(position_file):
-                        with open(position_file, "r") as file:
-                            line = file.readline().strip()
-                            if line:
-                                lat, lon = map(float, line.split(","))
-                                
-                                # Add to position list
-                                self.drone_position_list.append((lat, lon))
-                                
-                                # Create marker options
-                                marker_options = {
-                                    "icon": DRONE_ICON_PATH,
-                                    "draggable": False,
-                                    "title": f"UAV {drone_id}",
-                                    "iconSize": {"width": 21, "height": 21},
-                                }
-                                
-                                # Add marker to both maps
-                                marker_key = f"uav_{drone_id}"
-                                self.rescue_map.addMarker(
-                                    key=marker_key,
-                                    latitude=lat,
-                                    longitude=lon,
-                                    **marker_options
-                                )
-                                self.ovv_map.addMarker(
-                                    key=marker_key,
-                                    latitude=lat,
-                                    longitude=lon,
-                                    **marker_options
-                                )
-                                
-                                # Store position
-                                self.drone_initial_positions[marker_key] = (lat, lon)
-                                loaded_drones += 1
-                                
-                                if self.debug:
-                                    print(f"Loaded {marker_key} position: {lat}, {lon}")
+                    if init:
+                        uav_key = f"uav_{drone_id}"
+                        if uav_key in init_positions:
+                            lat = float(init_positions[uav_key]["latitude"])
+                            lon = float(init_positions[uav_key]["longitude"])
                     else:
-                        # If file doesn't exist for current positions, try to use initial position
-                        if not init:
-                            init_position_file = f"{PARENT_DIR}/src/logs/drone_init_pos/uav_{drone_id}.txt"
-                            if os.path.exists(init_position_file):
-                                with open(init_position_file, "r") as file:
-                                    lat, lon = map(float, file.readline().strip().split(","))
-                                    logger.warning(f"Current position not found for UAV {drone_id}, using initial position")
-                            else:
-                                # Use default position if neither file exists
-                                lat, lon = (INIT_LAT + 0.0001 * i, INIT_LON + 0.0001 * i)
-                                logger.warning(f"No position data found for UAV {drone_id}, using default position")
-                            
-                            # Add this fallback position
-                            self.drone_position_list.append((lat, lon))
-                            marker_key = f"uav_{drone_id}"
-                            marker_options = {
-                                "icon": DRONE_ICON_PATH,
-                                "draggable": False,
-                                "title": f"UAV {drone_id} (Default)",
-                                "iconSize": {"width": 21, "height": 21},
-                            }
-                            self.rescue_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
-                            self.ovv_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
-                            self.drone_initial_positions[marker_key] = (lat, lon)
-                            loaded_drones += 1
+                        position_file = f"{position_dir}/uav_{drone_id}.txt"
+                        if os.path.exists(position_file):
+                            with open(position_file, "r") as file:
+                                line = file.readline().strip()
+                                if line:
+                                    lat, lon = map(float, line.split(","))
+                                
+                    if lat is not None and lon is not None:
+                        self.drone_position_list.append((lat, lon))
+                        marker_options = {
+                            "icon": DRONE_ICON_PATH,
+                            "draggable": False,
+                            "title": f"UAV {drone_id}",
+                            "iconSize": {"width": 21, "height": 21},
+                        }
+                        marker_key = f"uav_{drone_id}"
+                        self.rescue_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
+                        self.ovv_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
+                        self.drone_initial_positions[marker_key] = (lat, lon)
+                        loaded_drones += 1
+                    elif not init:
+                        # Fallback for current position if not found
+                        lat, lon = (INIT_LAT + 0.0001 * i, INIT_LON + 0.0001 * i)
+                        self.drone_position_list.append((lat, lon))
+                        logger.warning(f"No position data found for UAV {drone_id}, using default position")
                 
                 except Exception as e:
                     logger.error(f"Failed to load position for UAV {drone_id}: {e}")
@@ -1191,4 +1164,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
