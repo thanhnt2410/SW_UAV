@@ -8,9 +8,3 @@ conda init all
 
 exec bash
 conda config --set auto_activate_base false
-
-exec bash
-echo 'Creating conda environment'
-
-conda create -n uav python=3.8
-conda activate uav

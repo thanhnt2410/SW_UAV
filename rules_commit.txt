@@ -1,0 +1,17 @@
+Add → thêm chức năng
+
+Fix → sửa lỗi
+
+Update → cập nhật
+
+Remove → xóa
+
+Refactor → viết lại nhưng không đổi chức năng
+
+Improve → cải thiện
+
+Rename → đổi tên
+
+Optimize → tối ưu
+
+Revert → quay lại
