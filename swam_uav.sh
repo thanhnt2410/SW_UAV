@@ -4,7 +4,7 @@ pkill -f gz
 pkill -f gazebo
 pkill -f ruby
 
-cd ~/PX4-Autopilot
+cd ./dependencies/PX4-Autopilot
 gnome-terminal -- bash -c "make px4_sitl gz_x500; exec bash"
 sleep 10
 for i in {1..5}

@@ -1037,8 +1037,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         except Exception as e:
             UAVs[uav_index]["status"]["arming_status"] = "DISARMED"
             self._update_uav_info_display(uav_index)
-            logger.log(f"Arming error: {repr(e)}", level="error")
-            self.popup_msg(f"Error: {repr(e)}", src_msg="uav_arm_callback", type_msg="Error")
+            
+            # Lấy thông báo lỗi chi tiết thay vì dùng repr(e)
+            error_detail = str(e)
+            if hasattr(e, '_result'):
+                error_detail = f"{e._result.result_str} (Code: {e._result.result})"
+                
+            logger.log(f"Arming error: {error_detail}", level="error")
+            self.popup_msg(f"Error: {error_detail}", src_msg="uav_arm_callback", type_msg="Error")
 
     async def uav_disarm_callback(self, uav_index) -> None:
         """
