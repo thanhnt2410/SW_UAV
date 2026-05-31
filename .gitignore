@@ -180,6 +180,8 @@ assets/videos/*
 assets/streams/*
 dependencies/
 src/logs/drone_current_pos/*
+src/logs/map_data/*
 src/backup/*
 src/data/parameters/*
 !src/backup/.keep
+src/logs/points/*

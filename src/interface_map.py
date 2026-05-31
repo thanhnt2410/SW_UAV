@@ -1,5 +1,6 @@
 # !/usr/bin/env python3
 import copy
+import os
 import pprint
 import sys
 from datetime import datetime
@@ -91,8 +92,11 @@ class Map(Interface):
 
     def __init__(self):
         """Initialize the map interface"""
+        print("[startup] initializing Interface", file=sys.stderr, flush=True)
         Interface.__init__(self)
+        print("[startup] initializing maps", file=sys.stderr, flush=True)
         self._init_map()
+        print("[startup] initializing map events", file=sys.stderr, flush=True)
         self._init_map_events()
 
     def _init_map(self):
@@ -103,19 +107,23 @@ class Map(Interface):
             self.ui.tabWidget.setCurrentIndex(0)
 
             # Initialize Rescue Map (main interactive map)
+            print("[startup] creating rescue map", file=sys.stderr, flush=True)
             self.rescue_map = MapEngine(
                 name="Rescue Map", widget=self.ui.MapWebView, url=map_html_path
             )
+            print("[startup] rescue map created", file=sys.stderr, flush=True)
             self._setup_map_callbacks(self.rescue_map)
             self.rescue_map.setZoom(30)
             self.rescue_map.waitUntilReady()
 
             # Initialize Overview Map (non-interactive mirror)
+            print("[startup] creating overview map", file=sys.stderr, flush=True)
             self.ovv_map = MapEngine(
                 name="Overview Map",
                 widget=self.ui.Overview_map_view,
                 url=map_ovv_html_path,
             )
+            print("[startup] overview map created", file=sys.stderr, flush=True)
             self.ovv_map.mapMovedCallback = self.onMapOvvMoved
             self.ovv_map.waitUntilReady()
 

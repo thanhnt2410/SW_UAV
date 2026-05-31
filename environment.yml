@@ -14,7 +14,7 @@ dependencies:
       - pyserial==3.5
       
       # --- UI & Async ---
-      - PyQt5==5.15.7
+      - PyQt5==5.15.11
       - PyQtWebEngine==5.15.7
       - asyncqt==0.8.0
       - qasync==0.28.0

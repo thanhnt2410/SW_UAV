@@ -38,6 +38,7 @@ map_engine.drawPolygon(
 )
 """
 
+import os
 import json
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -49,8 +50,9 @@ from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineView, QWebEngineSettings
 from PyQt5.QtWidgets import QApplication
 
-# Suppress QtWebEngine logging
-QtCore.qInstallMessageHandler(lambda *args: None)
+# Suppress QtWebEngine logging only when explicitly requested.
+if os.environ.get("UAV_SUPPRESS_QT_LOGS") == "1":
+    QtCore.qInstallMessageHandler(lambda *args: None)
 
 # Debug flag for function tracing
 doTrace = False
