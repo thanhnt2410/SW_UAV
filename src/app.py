@@ -5,6 +5,7 @@ from PyQt5 import QtWidgets
 
 from interface_wrapper import *
 
+os.environ.setdefault("QT_XCB_GL_INTEGRATION", "none")
 
 class Runner:
     def __init__(self):
