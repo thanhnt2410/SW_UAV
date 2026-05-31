@@ -33,7 +33,7 @@ def run_commands():
         "python3 src/app.py",
         # "python3 src/map/DG5.py",
         # "dependencies/QGroundControl.AppImage",
-        "watch -n 0.5 netstat -lunp",
+        "watch -n 0.5 ss -lunp",
     ]
 
     for i, command in enumerate(commands[:]):
