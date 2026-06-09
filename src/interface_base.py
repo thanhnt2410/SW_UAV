@@ -103,14 +103,14 @@ class Interface(QMainWindow):
         This groups related UI elements into lists for more efficient code.
         """
         # UAV-specific UI component lists
-        self.uav_tabs = [
-            self.ui.actionUAV_1_view,
-            self.ui.actionUAV_2_view,
-            self.ui.actionUAV_3_view,
-            self.ui.actionUAV_4_view,
-            self.ui.actionUAV_5_view,
-            self.ui.actionUAV_6_view,
-        ]
+        # self.uav_tabs = [
+        #     self.ui.actionUAV_1_view,
+        #     self.ui.actionUAV_2_view,
+        #     self.ui.actionUAV_3_view,
+        #     self.ui.actionUAV_4_view,
+        #     self.ui.actionUAV_5_view,
+        #     self.ui.actionUAV_6_view,
+        # ]
 
         self.uav_stream_screen_views = [
             self.ui.stream_screen_1,
@@ -367,24 +367,24 @@ class Interface(QMainWindow):
         """Set up menu bar action event handlers."""
         try:
             # UAV view actions
-            self.ui.actionUAV_1_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav1")
-            )
-            self.ui.actionUAV_2_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav2")
-            )
-            self.ui.actionUAV_3_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav3")
-            )
-            self.ui.actionUAV_4_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav4")
-            )
-            self.ui.actionUAV_5_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav5")
-            )
-            self.ui.actionUAV_6_view.triggered.connect(
-                lambda: self._switch_layout("main page", "uav6")
-            )
+            # self.ui.actionUAV_1_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav1")
+            # )
+            # self.ui.actionUAV_2_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav2")
+            # )
+            # self.ui.actionUAV_3_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav3")
+            # )
+            # self.ui.actionUAV_4_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav4")
+            # )
+            # self.ui.actionUAV_5_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav5")
+            # )
+            # self.ui.actionUAV_6_view.triggered.connect(
+            #     lambda: self._switch_layout("main page", "uav6")
+            # )
             
             # Overview and settings actions
             self.ui.actionOverview.triggered.connect(
