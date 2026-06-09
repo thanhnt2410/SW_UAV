@@ -179,7 +179,7 @@ cache/*.
 assets/videos/*
 assets/streams/*
 dependencies/
-src/logs/drone_current_pos/*
+src/logs/*
 src/backup/*
 src/data/parameters/*
 !src/backup/.keep
