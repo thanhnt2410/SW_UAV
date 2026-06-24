@@ -179,8 +179,7 @@ cache/*.
 assets/videos/*
 assets/streams/*
 dependencies/
-src/logs/*
 src/backup/*
 src/data/parameters/*
 !src/backup/.keep
-src/logs/points/*
+src/logs/*
