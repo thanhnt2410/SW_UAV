@@ -19,11 +19,8 @@ from PyQt5.QtWidgets import QFileDialog
 # ultralytics
 from ultralytics import YOLO
 
-# user-defined configuration
-from config.interface_config import *
-from config.stream_config import *
-from config.uav_config import *
-
+# user-defined configuration loader
+from config_loader import ConfigLoader
 # user-defined interface
 from interface_base import *
 from interface_map import *
@@ -35,6 +32,12 @@ from utils.qt_utils import *
 from utils.serial_utils import *
 from utils.stream_utils import *
 
+# --- Load Application Configuration ---
+try:
+    config = ConfigLoader()
+except (FileNotFoundError, ValueError) as e:
+    print(f"[FATAL] Failed to load configuration: {e}")
+    sys.exit(1)
 
 # gimbal 
 GIMBAL_C12_PATH = os.path.join(os.path.dirname(__file__), "GimbalC12.py")
@@ -51,55 +54,50 @@ print(pyfiglet.figlet_format("UAV SWARM CONTROL APP"))
 print("*" * 50)
 print("CURRENT TIME:", __current_time__)
 
-# Load initial UAV positions from YAML config
-# Đường dẫn đến file YAML, thư mục config nằm cùng cấp với src
-INIT_UAVS_POS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "init_pos_uavs.yaml")
-with open(INIT_UAVS_POS_CONFIG_PATH, "r") as f:
-    INITIAL_UAV_POSITIONS = yaml.safe_load(f)
-
 # UAVs object
 try:
     UAVs = {
-        uav_index: {
-            "ID": uav_index,
+        uav_conf["id"]: {
+            "ID": uav_conf["id"],
             "server": {
                 "shell": MAVSDKServer(
-                    id=uav_index,
-                    protocol=PROTOCOLS[uav_index - 1],
-                    server_host=SERVER_HOSTS[uav_index - 1],
-                    port=CLIENT_PORTS[uav_index - 1],
-                    bind_port=SERVER_PORTS[uav_index - 1],
+                    id=uav_conf["id"],
+                    protocol=config.PROTOCOLS[uav_conf["id"] - 1],
+                    server_host=config.SERVER_HOSTS[uav_conf["id"] - 1],
+                    port=config.CLIENT_PORTS[uav_conf["id"] - 1],
+                    bind_port=config.SERVER_PORTS[uav_conf["id"] - 1],
                 ),
                 "start": False,
             },
-            "system": System(mavsdk_server_address="localhost", port=CLIENT_PORTS[uav_index - 1]),
-            "system_address": SYSTEMS_ADDRESSES[uav_index - 1],
-            "streaming_address": DEFAULT_STREAM_VIDEO_PATHS[uav_index - 1],
-            "connection_allow": connection_allows[uav_index - 1],
-            "streaming_enable": streaming_enables[uav_index - 1],
-            "detection_enable": detection_enables[uav_index - 1],
-            "recording_enable": recording_enables[uav_index - 1],
-            "init_params": { # Sử dụng tọa độ từ file YAML
-                "longitude": INITIAL_UAV_POSITIONS[f"uav_{uav_index}"]["longitude"],
-                "latitude": INITIAL_UAV_POSITIONS[f"uav_{uav_index}"]["latitude"],
-                "altitude": INIT_ALT[uav_index - 1],
+            "system": System(mavsdk_server_address="localhost", port=config.CLIENT_PORTS[uav_conf["id"] - 1]),
+            "system_address": config.SYSTEMS_ADDRESSES[uav_conf["id"] - 1],
+            "streaming_address": config.DEFAULT_STREAM_VIDEO_PATHS[uav_conf["id"] - 1],
+            "connection_allow": uav_conf["connection_allow"],
+            "streaming_enable": uav_conf["streaming_enable"],
+            "detection_enable": uav_conf["detection_enable"],
+            "recording_enable": uav_conf["recording_enable"],
+            "init_params": {
+                "longitude": config.init_pos[f"uav_{uav_conf['id']}"]["longitude"],
+                "latitude": config.init_pos[f"uav_{uav_conf['id']}"]["latitude"],
+                "altitude": uav_conf["init_alt"],
             },
+            "overwrite_params": uav_conf["overwrite_params"],
             "status": {
                 "connection_status": False,
                 "streaming_status": False,
                 "on_mission": False,
                 "mission_start_time": "",
-                "arming_status": "No information",
-                "battery_status": "No information",
-                "gps_status": "No information",
-                "mode_status": "No information",
-                "actuator_status": "No information",
-                "altitude_status": ["No information", "No information"],
-                "position_status": ["No information", "No information"],
+                "arming_status": "N/A",
+                "battery_status": "N/A",
+                "gps_status": "N/A",
+                "mode_status": "N/A",
+                "actuator_status": False, # Default to closed
+                "altitude_status": ["N/A", "N/A"],
+                "position_status": ["N/A", "N/A"],
             },
             "rescue_first_time": True,
         }
-        for uav_index in range(1, MAX_UAV_COUNT + 1)
+        for uav_conf in config.uav['uavs']
     }
 except Exception as e:
     print(f"[Error]: {repr(e)}")
@@ -113,13 +111,13 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
     def __init__(self) -> None:
         super().__init__()
         # UAVs
-        self.uav_stream_threads = [None for _ in range(1, MAX_UAV_COUNT + 1)]
-        self.uav_stream_frame_cnt = [0 for _ in range(1, MAX_UAV_COUNT + 1)]
-        logger.log(f"Initialize detection model on {DEVICE}...", level="info")
+        self.uav_stream_threads = [None for _ in range(config.MAX_UAV_COUNT)]
+        self.uav_stream_frame_cnt = [0 for _ in range(config.MAX_UAV_COUNT)]
+        logger.log(f"Initialize detection model on {config.stream['source'].get('device', 'cpu')}...", level="info")
         #
         start_time = time.time()
         self.uav_detection_models = [
-            YOLO(model_uav_paths[uav_index]) for uav_index in range(1, MAX_UAV_COUNT + 1)
+            YOLO(config.model_uav_paths[uav_index]) for uav_index in range(1, config.MAX_UAV_COUNT + 1)
         ]
         logger.log(
             f"Detection models loaded successfully in {(time.time() - start_time):3f}s!",
@@ -132,7 +130,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
     def _update_action_buttons_state(self, tab_index: int) -> None:
         """Update action buttons based on the selected tab"""
         global UAVs
-        if tab_index in range(1, MAX_UAV_COUNT + 1):
+        if tab_index in range(1, config.MAX_UAV_COUNT + 1):
             is_on_mission = UAVs[tab_index]["status"].get("on_mission", False)
             if is_on_mission:
                 self._set_pause_button_style("Pause")
@@ -237,7 +235,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         battery level, and other status information for each UAV.
         """
         # Update connection status indicators
-        for uav_index in range(1, MAX_UAV_COUNT + 1):
+        for uav_index in range(1, config.MAX_UAV_COUNT + 1):
             self.set_connection_display(uav_index, UAVs[uav_index]["status"])
 
     def _connect_custom_signals(self) -> None:
@@ -325,7 +323,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         the appropriate handler functions.
         """
         # Connect Set Parameter buttons
-        for uav_index in range(1, MAX_UAV_COUNT + 1):
+        for uav_index in range(1, config.MAX_UAV_COUNT + 1):
             idx = uav_index - 1  # Adjust for zero-based indexing
             
             # Create a closure to capture the current UAV index
@@ -343,7 +341,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
 
     def _connect_goto_buttons(self) -> None:
         # GoTo button mapping for settings and overview pages
-        for uav_index in range(MAX_UAV_COUNT + 1):  # 0-6 for all UAVs plus all-UAV control
+        for uav_index in range(config.MAX_UAV_COUNT + 1):  # 0-6 for all UAVs plus all-UAV control
             # Create closures to capture the current UAV index
             def create_goto_settings_callback(uav_idx):
                 return lambda: asyncio.create_task(
@@ -372,7 +370,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         This connects the returnPressed event of command input fields
         to the process_command function for each UAV.
         """
-        for index in range(MAX_UAV_COUNT):
+        for index in range(config.MAX_UAV_COUNT):
             # Create a closure to capture the current UAV index
             def create_command_callback(uav_idx):
                 return lambda: asyncio.create_task(self.process_command(uav_idx))
@@ -401,7 +399,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         try:
             # If no specific indexes provided, use all available UAVs
-            uav_indexes = range(1, MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
+            uav_indexes = range(1, config.MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
             
             for uav_index in uav_indexes:
                 # Skip UAVs that aren't eligible for streaming
@@ -447,18 +445,19 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         capture = {
             "index": uav_index,
             "address": UAVs[uav_index]["streaming_address"],
-            "width": DEFAULT_STREAM_SIZE[0],
-            "height": DEFAULT_STREAM_SIZE[1],
-            "fps": DEFAULT_STREAM_FPS,
+            "width": config.stream['source']['default_size']['width'],
+            "height": config.stream['source']['default_size']['height'],
+            "fps": config.stream['source']['default_fps'],
         }
         
         # Recording settings
         writer = {
             "index": uav_index,
             "enable": UAVs[uav_index]["recording_enable"],
-            "filename": DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
-            "fourcc": FOURCC,
-            "frameSize": DEFAULT_STREAM_SIZE,
+            "filename": config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
+            "fourcc": config.stream['source']['fourcc'],
+            "frameSize": (config.stream['source']['default_size']['width'],
+                          config.stream['source']['default_size']['height']),
         }
         
         return {
@@ -469,7 +468,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
     def _log_stream_creation(self, uav_index):
         """Log the creation of a streaming thread"""
         recording_path = (
-            os.path.relpath(DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
+            os.path.relpath(config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
             if UAVs[uav_index]["recording_enable"]
             else 'None'
         )
@@ -611,14 +610,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             if mode == "init":
                 # Prepare initial table data from configuration
                 data = {
-                    headers[0]: [uav_index for uav_index in range(1, MAX_UAV_COUNT + 1)],
+                    headers[0]: [uav_index for uav_index in range(1, config.MAX_UAV_COUNT + 1)],
                     headers[1]: [
                         f"{UAVs[uav_index]['system_address']} -p {UAVs[uav_index]['system']._port}"
-                        for uav_index in range(1, MAX_UAV_COUNT + 1)
+                        for uav_index in range(1, config.MAX_UAV_COUNT + 1)
                     ],
                     headers[2]: [
                         UAVs[uav_index]['streaming_address']
-                        for uav_index in range(1, MAX_UAV_COUNT + 1)
+                        for uav_index in range(1, config.MAX_UAV_COUNT + 1)
                     ],
                 }
                 nSwarms = len(connection_allow_indexes)
@@ -674,12 +673,12 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         if feature_type == "connection":
             return [
-                index + 1 for index in range(MAX_UAV_COUNT) 
+                index + 1 for index in range(config.MAX_UAV_COUNT) 
                 if UAVs[index + 1]["connection_allow"]
             ]
         elif feature_type == "streaming":
             return [
-                index + 1 for index in range(MAX_UAV_COUNT) 
+                index + 1 for index in range(config.MAX_UAV_COUNT) 
                 if UAVs[index + 1]["streaming_enable"]
             ]
         else:
@@ -699,7 +698,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Process each UAV's settings
-        for index in range(MAX_UAV_COUNT):
+        for index in range(config.MAX_UAV_COUNT):
             uav_index = index + 1
             if uav_index in connection_allow_indexes:
                 # Parse connection address into components
@@ -726,7 +725,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 UAVs[uav_index]["streaming_address"] = data["streaming_address"][index].strip()
         
         # Reset connection and streaming status after configuration change
-        for uav_index in range(1, MAX_UAV_COUNT + 1):
+        for uav_index in range(1, config.MAX_UAV_COUNT + 1):
             UAVs[uav_index]["status"]["connection_status"] = False
             UAVs[uav_index]["status"]["streaming_status"] = False
         
@@ -896,9 +895,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
 
         # Handle the case of connecting to all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             connect_tasks = [
-                self.uav_connect_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_connect_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*connect_tasks)
             return
@@ -984,7 +983,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         # Overwrite parameters from configuration
         await uav_fn_overwrite_params(
-            UAVs[uav_index], parameters=OVERWRITE_PARAMS[uav_index]
+            UAVs[uav_index], parameters=UAVs[uav_index]["overwrite_params"]
         )
         
         # Set additional parameters manually
@@ -1000,7 +999,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             print(f"[ERROR] UAV-{uav_index}: Lỗi khi đặt RTL_RETURN_ALT - {e}")
         # Export parameters to file
         await uav_fn_export_params(
-            drone=UAVs[uav_index], save_path=parameter_data_files[uav_index - 1]
+            drone=UAVs[uav_index], save_path=config.parameter_data_files[uav_index - 1]
         )
 
     async def uav_arm_callback(self, uav_index) -> None:
@@ -1018,10 +1017,11 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         """
         global UAVs
         
+        avail_uav_indexes = [uav['id'] for uav in config.uav['uavs'] if uav['id'] != config.RESCUE_UAV_INDEX]
         # Handle the case of arming all available UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             arm_tasks = [
-                self.uav_arm_callback(i) for i in AVAIL_UAV_INDEXES
+                self.uav_arm_callback(i) for i in avail_uav_indexes
             ]
             await asyncio.gather(*arm_tasks)
             return
@@ -1077,9 +1077,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of disarming all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             disarm_tasks = [
-                self.uav_disarm_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_disarm_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*disarm_tasks)
             return
@@ -1119,10 +1119,11 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         """
         global UAVs
         
+        avail_uav_indexes = [uav['id'] for uav in config.uav['uavs'] if uav['id'] != config.RESCUE_UAV_INDEX]
         # Handle the case of taking off all available UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             takeoff_tasks = [
-                self.uav_takeoff_callback(i) for i in AVAIL_UAV_INDEXES
+                self.uav_takeoff_callback(i) for i in avail_uav_indexes
             ]
             await asyncio.gather(*takeoff_tasks)
             return
@@ -1168,7 +1169,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         )
         
         # Save to YAML file
-        yaml_file = INIT_UAVS_POS_CONFIG_PATH # Sử dụng đường dẫn đã định nghĩa ở trên
+        yaml_file = config.config_dir / 'init_pos_uavs.yaml'
         try:
             data = {}
             if os.path.exists(yaml_file):
@@ -1203,9 +1204,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of landing all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             landing_tasks = [
-                self.uav_land_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_land_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*landing_tasks)
             return
@@ -1245,9 +1246,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of returning all available UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             return_tasks = [
-                self.uav_return_callback(i, rtl=rtl) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_return_callback(i, rtl=rtl) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*return_tasks)
             return
@@ -1330,16 +1331,17 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         """
         global UAVs
         
+        avail_uav_indexes = [uav['id'] for uav in config.uav['uavs'] if uav['id'] != config.RESCUE_UAV_INDEX]
         # Handle the case of missions for all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             mission_tasks = [
-                self.uav_mission_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_mission_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*mission_tasks)
             return
         
         # Handle regular UAV mission
-        if uav_index in AVAIL_UAV_INDEXES:
+        if uav_index in avail_uav_indexes:
             # await self._execute_standard_mission(uav_index)
             await asyncio.gather(
                 self._execute_standard_mission(uav_index),
@@ -1347,7 +1349,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             )
         
         # Handle rescue UAV mission
-        elif uav_index == RESCUE_UAV_INDEX:
+        elif uav_index == config.RESCUE_UAV_INDEX:
             # Check if this is first time or if rescue tab is selected
             # if not (UAVs[RESCUE_UAV_INDEX]["rescue_first_time"] or 
             #         (self.ui.tabWidget.currentIndex() == RESCUE_UAV_INDEX)):
@@ -1419,8 +1421,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         print(f"\n[DEBUG 1] Button Push Mission clicked! uav_index = {uav_index}")
 
+        avail_uav_indexes = [uav['id'] for uav in config.uav['uavs'] if uav['id'] != config.RESCUE_UAV_INDEX]
         # Handle pushing mission to ALL UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             mission_file = QFileDialog.getOpenFileName(
                 parent=self,
                 caption="Select Mission File for ALL UAVs",
@@ -1432,7 +1435,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 return
                 
             push_tasks = []
-            for i in AVAIL_UAV_INDEXES:
+            for i in avail_uav_indexes:
                 if self._check_uav_connection(i):
                     self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
                     push_tasks.append(
@@ -1452,6 +1455,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.popup_msg(f"Please connect UAV {uav_index} first!", src_msg="Push Mission", type_msg="Warning")
             return
 
+        plans_log_dir = self.config.SRC_DIR / "logs" / "points"
         if not os.path.exists(plans_log_dir):
             os.makedirs(plans_log_dir, exist_ok=True)
 
@@ -1503,9 +1507,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of toggling all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             toggle_tasks = [
-                self.uav_toggle_pause_mission_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_toggle_pause_mission_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
             ]
             await asyncio.gather(*toggle_tasks)
             return
@@ -1563,9 +1567,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of toggling all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             toggle_tasks = [
-                self.uav_toggle_open_callback(i) for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_toggle_open_callback(i) for i in range(1, config.MAX_UAV_COUNT + 1)
                 if UAVs[i]["connection_allow"]
             ]
             await asyncio.gather(*toggle_tasks)
@@ -1629,8 +1633,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle the case of toggling all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
-            for i in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
+            for i in range(1, config.MAX_UAV_COUNT + 1):
                 # Only toggle UAVs that are eligible for streaming
                 if self._can_stream(i):
                     self.uav_toggle_camera_callback(i)
@@ -1699,14 +1703,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self._sync_coordinates_between_pages(longitude, latitude)
             
             # Execute goto command for specific UAV or all UAVs
-            if uav_index in range(1, MAX_UAV_COUNT + 1):
+            if uav_index in range(1, config.MAX_UAV_COUNT + 1):
                 # Skip if UAV is not connected or not allowed
                 if not self._check_uav_connection(uav_index):
                     return
                 # Send the command
                 self.update_terminal(
                     f"[INFO] Sent GOTO command to UAV {uav_index}: lat={latitude}, lon={longitude}")
-                await uav_fn_goto_location(
+                await uav_fn_goto_location( # type: ignore
                     drone=UAVs[uav_index], latitude=latitude, longitude=longitude)
                 # Update status
                 UAVs[uav_index]["status"]["mode_status"] = "Going to position"
@@ -1714,7 +1718,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             else:
                 # Command all UAVs to go to the same position
                 goto_tasks = []
-                for i in range(1, MAX_UAV_COUNT + 1):
+                for i in range(1, config.MAX_UAV_COUNT + 1):
                     if self._check_uav_connection(i):
                         self.update_terminal(
                             f"[INFO] Sent GOTO command to UAV {i}: lat={latitude}, lon={longitude}"
@@ -1745,8 +1749,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Set default coordinates (offset by UAV index to avoid collisions)
-        default_longitude = UAVs[uav_index]["init_params"]["longitude"] if uav_index > 0 else INIT_LON
-        default_latitude = UAVs[uav_index]["init_params"]["latitude"] if uav_index > 0 else INIT_LAT
+        default_longitude = UAVs[uav_index]["init_params"]["longitude"] if uav_index > 0 else config.init_pos['uav_1']['longitude']
+        default_latitude = UAVs[uav_index]["init_params"]["latitude"] if uav_index > 0 else config.init_pos['uav_1']['latitude']
         
         # Get coordinates from the specified page
         if page == "settings":
@@ -1826,10 +1830,10 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         global UAVs
         
         # Handle getting status for all UAVs
-        if uav_index not in range(1, MAX_UAV_COUNT + 1):
+        if uav_index not in range(1, config.MAX_UAV_COUNT + 1):
             status_tasks = [
-                self.uav_fn_get_status(i, verbose=verbose)
-                for i in range(1, MAX_UAV_COUNT + 1)
+                self.uav_fn_get_status(i, verbose=verbose) # type: ignore
+                for i in range(1, config.MAX_UAV_COUNT + 1)
                 if UAVs[i]["connection_allow"]
             ]
             await asyncio.gather(*status_tasks)
@@ -1939,7 +1943,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 # self.show_drones(init=False)
                     
                 # Only process one position update per call, comment out if you want to make it continuous
-                # break
+                break
                 
         except Exception as e:
             logger.log(f"Failed to get position for UAV {uav_index}: {e}", level="error")
@@ -1952,7 +1956,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         try:
             # position_file = f"{__current_path__}/logs/drone_current_pos/uav_{uav_index}.txt"
             # os.makedirs(os.path.dirname(position_file), exist_ok=True)
-            position_file = drone_current_pos_files[uav_index - 1]
+            position_file = config.drone_current_pos_files[uav_index - 1]
             
             if not os.path.exists(position_file):
                 os.makedirs(os.path.dirname(position_file), exist_ok=True)
@@ -1993,7 +1997,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 self._update_uav_info_display(uav_index)
                 
                 # Only process one position update per call, comment out if you want to make it continuous
-                # break
+                break
                 
         except Exception as e:
             logger.log(f"Failed to get flight mode for UAV {uav_index}: {e}", level="error")
@@ -2030,7 +2034,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     self.update_terminal(f"[WARNING] UAV {uav_index} battery at {battery_percent}%", uav_index)
                     break
                 # Only process one battery update per call
-                # break
+                break
                 
         except Exception as e:
             logger.log(f"Failed to get battery status for UAV {uav_index}: {e}", level="error")
@@ -2061,7 +2065,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 self._update_uav_info_display(uav_index)
                 
                 # Only process one arm status update per call
-                # break
+                break
                 
         except Exception as e:
             logger.log(f"Failed to get arm status for UAV {uav_index}: {e}", level="error")
@@ -2096,7 +2100,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     self.update_terminal(f"[WARNING] UAV {uav_index} has poor GPS fix: {gps_status}", uav_index)
                 
                 # Only process one GPS update per call
-                # break
+                break
                 
         except Exception as e:
             logger.log(f"Failed to get GPS info for UAV {uav_index}: {e}", level="error")
@@ -2122,7 +2126,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             # Get parameters from the UAV
             parameters = await uav_fn_get_params(
                 drone=UAVs[uav_index],
-                list_params=displayed_parameter_list,
+                list_params=config.interface['displayed_parameters'],
             )
             
             # Update parameter display fields
@@ -2170,7 +2174,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             
             # Populate parameters from input fields, falling back to current values if empty
             for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
-                param_name = displayed_parameter_list[i]
+                param_name = config.interface['displayed_parameters'][i]
                 input_text = input_widget.text()
                 
                 if not input_text:
@@ -2195,7 +2199,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             await uav_fn_set_params(
                 drone=UAVs[uav_index],
                 parameters=parameters,
-                param_file=parameter_data_files[uav_index - 1],
+                param_file=config.parameter_data_files[uav_index - 1],
             )
             
             # Refresh parameter display
@@ -2300,7 +2304,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             
             # Display the frame
             asyncio.create_task(self.update_uav_screen_view(
-                uav_index, streaming_frame, screen_name=DEFAULT_STREAM_SCREEN
+                uav_index, streaming_frame, screen_name=config.stream['display']['default_screen']
             ))
             
             # Process detection results if available and detection is enabled
@@ -2338,7 +2342,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
     def _should_process_frame(self, uav_index, current_fps):
         """Apply frame rate limiting to avoid overloading the UI."""
         # Calculate the frame skip rate to achieve target FPS
-        max_frame_cnt = max(1, current_fps // DEFAULT_STREAM_FPS)
+        max_frame_cnt = max(1, current_fps // config.stream['source']['default_fps'])
         
         # Increment the frame counter for this UAV
         self.uav_stream_frame_cnt[uav_index - 1] += 1
@@ -2849,9 +2853,12 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
             await uav_fn_do_mission(drone=UAVs[uav_index], mission_plan_file=plan_file)
             
-            # Hủy các task ngầm khi chuyến bay đã kết thúc
-            if not rtl_task.done(): rtl_task.cancel()
-            if not progress_task.done(): progress_task.cancel()
+            # Hủy các task ngầm khi chuyến bay đã kết thúc và đợi chúng cleanup.
+            background_tasks = [rtl_task, progress_task]
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
             
             # Khôi phục nút UI
             UAVs[uav_index]["status"]["on_mission"] = False
@@ -2920,13 +2927,13 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         """
 
         global UAVs
-        if not (
-            UAVs[RESCUE_UAV_INDEX]["status"]["connection_status"]
-            and UAVs[RESCUE_UAV_INDEX]["connection_allow"]
+        if not ( # type: ignore
+            UAVs[config.RESCUE_UAV_INDEX]["status"]["connection_status"]
+            and UAVs[config.RESCUE_UAV_INDEX]["connection_allow"]
         ):
             return
 
-        self.update_terminal(f"[INFO] Sent RESCUE command to UAV {RESCUE_UAV_INDEX}")
+        self.update_terminal(f"[INFO] Sent RESCUE command to UAV {config.RESCUE_UAV_INDEX}")
 
         await UAVs[RESCUE_UAV_INDEX]["system"].connect(
             system_address=UAVs[RESCUE_UAV_INDEX]["system_address"]
@@ -2934,10 +2941,10 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # check health 
         # TODO: check battery level here
         async for health in UAVs[RESCUE_UAV_INDEX]["system"].telemetry.health():
-            if health.is_global_position_ok and health.is_home_position_ok:
+            if health.is_global_position_ok and health.is_home_position_ok: # type: ignore
                 logger.log(
                     f"UAV-{RESCUE_UAV_INDEX} -- Global position for estimate OK", level="info"
-                )
+                ) # type: ignore
                 break
             
         logger.log(f"UAV-{RESCUE_UAV_INDEX} -- Arming and taking off", level="info")
@@ -3009,7 +3016,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 
                 # 2 UAV Rescue do the rescue mission and the detected drones goes into suspend mode
                 UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = True
-                UAVs[RESCUE_UAV_INDEX]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S")
+                UAVs[RESCUE_UAV_INDEX]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S") # type: ignore
                 if self.active_tab_index == RESCUE_UAV_INDEX:
                     self._set_pause_button_style("Pause")
                 await asyncio.gather(

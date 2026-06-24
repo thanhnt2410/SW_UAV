@@ -113,8 +113,8 @@ class Map(Interface):
             )
             print("[startup] rescue map created", file=sys.stderr, flush=True)
             self._setup_map_callbacks(self.rescue_map)
-            self.rescue_map.setZoom(30)
             self.rescue_map.waitUntilReady()
+            self.rescue_map.setZoom(30)
 
             # Initialize Overview Map (non-interactive mirror)
             print("[startup] creating overview map", file=sys.stderr, flush=True)

@@ -606,6 +606,10 @@ class Interface(QMainWindow):
             
             # Create and configure message box
             popup = QMessageBox(self)
+            if not hasattr(self, "_active_popups"):
+                self._active_popups = []
+            self._active_popups.append(popup)
+            popup.destroyed.connect(lambda _=None, dialog=popup: self._active_popups.remove(dialog) if dialog in self._active_popups else None)
             
             # Set icon based on message type
             if type_msg.lower() == "warning":
@@ -620,7 +624,8 @@ class Interface(QMainWindow):
             # Set message and show dialog
             popup.setText(f"[{type_msg.upper()}] -> From: {src_msg}\nDetails: {msg}")
             popup.setStandardButtons(QMessageBox.Ok)
-            popup.exec_()
+            popup.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+            popup.open()
             
         except Exception as e:
             # Fallback for errors in the popup system itself

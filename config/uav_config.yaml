@@ -1,0 +1,108 @@
+# Cấu hình cho các UAV, bao gồm chế độ hoạt động, kết nối và tham số bay.
+
+# Chế độ hoạt động: "simulation" hoặc "real"
+operation_mode: "simulation"
+
+general:
+  max_uav_count: 6
+  rescue_uav_index: 6
+
+# Cấu hình cho từng UAV
+uavs:
+  - id: 1
+    connection_allow: true
+    streaming_enable: true
+    detection_enable: true
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 2
+      CURRENT_SPEED: 3
+      RTL_AFTER_MS: true
+
+  - id: 2
+    connection_allow: true
+    streaming_enable: true
+    detection_enable: true
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 2
+      CURRENT_SPEED: 3
+      RTL_AFTER_MS: true
+
+  - id: 3
+    connection_allow: true
+    streaming_enable: true
+    detection_enable: true
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 2
+      CURRENT_SPEED: 3
+      RTL_AFTER_MS: true
+
+  - id: 4
+    connection_allow: true
+    streaming_enable: false
+    detection_enable: false
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 2
+      CURRENT_SPEED: 3
+      RTL_AFTER_MS: true
+
+  - id: 5
+    connection_allow: true
+    streaming_enable: false
+    detection_enable: false
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 2
+      CURRENT_SPEED: 3
+      RTL_AFTER_MS: true
+
+  - id: 6 # Rescue UAV
+    connection_allow: true
+    streaming_enable: true
+    detection_enable: false
+    recording_enable: false
+    init_alt: 13.0
+    overwrite_params:
+      MIS_TAKEOFF_ALT: 13
+      MPC_TKO_SPEED: 2
+      GND_SPEED_MAX: 3
+      CURRENT_SPEED: 20
+      RTL_AFTER_MS: true
+
+# Cấu hình kết nối cho các chế độ
+connection:
+  simulation:
+    protocol: "udpin"
+    server_host: "127.0.0.1"
+    base_server_port: 14540
+    base_client_port: 50060
+  real:
+    protocol: "serial"
+    base_client_port: 50060
+    baudrate: 57600
+    # Liệt kê cụ thể cổng serial cho từng UAV
+    server_hosts:
+      - "/dev/ttyACM0"
+      - "/dev/ttyACM1"
+      - "/dev/ttyACM2"
+      - "/dev/ttyACM3"
+      - "/dev/ttyACM4"
+      - "/dev/ttyUSB0"

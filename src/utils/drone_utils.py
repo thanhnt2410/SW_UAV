@@ -65,11 +65,14 @@ async def print_mission_progress(drone) -> None:
     Note:
         This is an asynchronous generator function that should be run as a background task
     """
-    async for mission_progress in drone["system"].mission.mission_progress():
-        print(
-            f"Mission UAV-{drone['ID']} progress: "
-            f"{mission_progress.current}/{mission_progress.total}"
-        )
+    try:
+        async for mission_progress in drone["system"].mission.mission_progress():
+            print(
+                f"Mission UAV-{drone['ID']} progress: "
+                f"{mission_progress.current}/{mission_progress.total}"
+            )
+    except asyncio.CancelledError:
+        pass
 
 
 # --------------------- PARAMETER MANAGEMENT FUNCTIONS ---------------------
@@ -603,8 +606,6 @@ async def observe_is_in_air(drone, running_tasks) -> None:
                         except asyncio.CancelledError:
                             pass
                             
-                # Clean up any remaining async generators
-                await asyncio.get_event_loop().shutdown_asyncgens()
                 return
                 
     except Exception as e:
@@ -771,10 +772,16 @@ async def uav_fn_do_mission(drone, mission_plan_file) -> None:
         
         # Try to cancel any running tasks
         try:
-            for task in [print_mission_progress_task, termination_task]:
+            cleanup_tasks = [
+                task for task in [print_mission_progress_task, termination_task]
+                if task is not None
+            ]
+            for task in cleanup_tasks:
                 if task is not None and not task.done():
                     task.cancel()
-        except:
+            if cleanup_tasks:
+                await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        except Exception:
             pass
         raise e  # Ném lỗi ra để giao diện UI nhận được và hiển thị Popup
 

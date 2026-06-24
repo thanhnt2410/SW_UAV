@@ -1,0 +1,35 @@
+# Cấu hình cho các luồng video (streaming).
+
+# Cấu hình hiển thị
+display:
+  default_screen: "stream_screen" # Options: "general_screen", "stream_screen", "ovv_screen", "all"
+  screen_sizes:
+    general_screen: { width: 640, height: 360 }
+    stream_screen: { width: 1280, height: 720 }
+    ovv_screen: { width: 320, height: 180 }
+
+# Cấu hình nguồn và ghi video
+source:
+  # Options: "streams", "rtsp", "webcam", "videos"
+  default_type: "rtsp"
+  default_size: { width: 320, height: 180 } # Độ phân giải khi ghi
+  default_fps: 30
+  fourcc: "XVID"
+  # Đường dẫn cho các loại nguồn.
+  # Sử dụng {ROOT_DIR} và {i} làm placeholder. Code sẽ thay thế chúng.
+  paths:
+    streams: "{ROOT_DIR}/assets/streams/cam{i}.mp4"
+    videos: "{ROOT_DIR}/assets/videos/cam{i}.mp4"
+    webcam: "/dev/video{i-1}"
+    rtsp:
+      - "rtsp://192.168.144.110:554/stream=1"
+      - "rtsp://192.168.144.108:554/stream=1"
+      - "rtsp://admin:admin@192.168.144.70:8554/main.264"
+      - "rtsp://192.168.144.108:554/stream=1"
+      - "rtsp://192.168.144.60/video3"
+      - "rtsp://192.168.144.111:554/stream=1"
+
+# Cấu hình model AI
+model:
+  # Template cho đường dẫn model YOLO. {SRC_DIR} sẽ được thay thế trong code.
+  yolo_path_template: "{SRC_DIR}/model/checkpoints/YOLO/25_3.pt"

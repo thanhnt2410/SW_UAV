@@ -1,0 +1,47 @@
+# Cấu hình cho giao diện người dùng (GUI).
+
+# Đường dẫn đến các tài nguyên (assets)
+# {ROOT_DIR} và {SRC_DIR} sẽ được thay thế bằng đường dẫn tuyệt đối trong code.
+assets:
+  logo1: "{ROOT_DIR}/assets/icons/logo1.png"
+  logo2: "{ROOT_DIR}/assets/icons/logoUET.png"
+  app_icon: "{ROOT_DIR}/assets/icons/app.png"
+
+  # Đường dẫn đến các icon của nút bấm
+  buttons:
+    connect: "{SRC_DIR}/Qt/icons/connect.png"
+    arm: "{SRC_DIR}/Qt/icons/arm.png"
+    disarm: "{SRC_DIR}/Qt/icons/disarm.png"
+    takeoff: "{SRC_DIR}/Qt/icons/takeOff.png"
+    landing: "{SRC_DIR}/Qt/icons/landing.png"
+    mission: "{SRC_DIR}/Qt/icons/mission.png"
+    pause: "{SRC_DIR}/Qt/icons/pauseMission.png"
+    push_mission: "{SRC_DIR}/Qt/icons/pushMission.png"
+    return: "{SRC_DIR}/Qt/icons/return.png"
+    rtl: "{SRC_DIR}/Qt/icons/rtl.png"
+    toggle_camera: "{SRC_DIR}/Qt/icons/toggle_camera.png"
+    open_close: "{SRC_DIR}/Qt/icons/toggle_open.png"
+
+  # Đường dẫn đến các ảnh mặc định khi không có tín hiệu hoặc tạm dừng
+  default_images:
+    nosignal_template: "{ROOT_DIR}/assets/pictures/resized/nosignal_{w}x{h}.jpg"
+    pause_template: "{ROOT_DIR}/assets/pictures/resized/pause_screen_{w}x{h}.jpg"
+    pause_all: "{ROOT_DIR}/assets/pictures/pause_screen.jpg"
+
+# Cấu hình bản đồ
+map:
+  main_html: "file://{ROOT_DIR}/assets/map.html"
+  overview_html: "file://{ROOT_DIR}/assets/map_ovv.html"
+
+# Danh sách các tham số PX4 sẽ được hiển thị trên giao diện
+displayed_parameters:
+  - "MIS_TAKEOFF_ALT"
+  - "COM_DISARM_LAND"
+  - "MPC_TKO_SPEED"
+  - "MPC_LAND_SPEED"
+  - "MPC_XY_P"
+  - "MPC_XY_VEL_P_ACC"
+  - "MPC_XY_VEL_D_ACC"
+  - "MC_PITCH_P"
+  - "MC_ROLL_P"
+  - "MC_YAW_P"

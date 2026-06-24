@@ -82,6 +82,50 @@ class _LoggedPage(QWebEnginePage):
         print(f"JS: {source} line {line}: {msg}")
 
 
+class _MapBridge(QtCore.QObject):
+    """Small WebChannel bridge exposing only map callbacks to JavaScript."""
+
+    def __init__(self, engine: "MapEngine"):
+        super().__init__(engine)
+        self._engine = engine
+
+    @pyqtSlot(str, float, float)
+    def markerMoved(self, key: str, latitude: float, longitude: float) -> None:
+        self._engine.markerMoved(key, latitude, longitude)
+
+    @pyqtSlot(str, float, float)
+    def markerRightClicked(self, key: str, latitude: float, longitude: float) -> None:
+        self._engine.markerRightClicked(key, latitude, longitude)
+
+    @pyqtSlot(str, float, float)
+    def markerClicked(self, key: str, latitude: float, longitude: float) -> None:
+        self._engine.markerClicked(key, latitude, longitude)
+
+    @pyqtSlot(str, float, float)
+    def markerDoubleClicked(self, key: str, latitude: float, longitude: float) -> None:
+        self._engine.markerDoubleClicked(key, latitude, longitude)
+
+    @pyqtSlot(float, float)
+    def mapMoved(self, latitude: float, longitude: float) -> None:
+        self._engine.mapMoved(latitude, longitude)
+
+    @pyqtSlot(float, float)
+    def mapRightClicked(self, latitude: float, longitude: float) -> None:
+        self._engine.mapRightClicked(latitude, longitude)
+
+    @pyqtSlot(float, float)
+    def mapLeftClicked(self, latitude: float, longitude: float) -> None:
+        self._engine.mapLeftClicked(latitude, longitude)
+
+    @pyqtSlot(float, float)
+    def mapDoubleClicked(self, latitude: float, longitude: float) -> None:
+        self._engine.mapDoubleClicked(latitude, longitude)
+
+    @pyqtSlot(str)
+    def geoJsonHandle(self, geojson: str) -> None:
+        self._engine.geoJsonHandle(geojson)
+
+
 def geojson_to_coordinates(geojson: Union[str, Dict[str, Any]]) -> List:
     """
     Convert GeoJSON to coordinates array.
@@ -269,6 +313,16 @@ class MapEngine(QWebEngineView):
         self.map_widget.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
         self.map_widget.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
 
+        # Setup web channel for JS-Python communication before loading the page.
+        self.map_page = self.map_widget.page()
+        self.web_channel = QWebChannel(self.map_page)
+        self.web_bridge = _MapBridge(self)
+        self.map_page.setWebChannel(self.web_channel)
+        self.web_channel.registerObject("qtWidget", self.web_bridge)
+
+        # Connect initialization signal before loading local pages.
+        self.map_widget.loadFinished.connect(self.onLoadFinished)
+
         # Load URL if provided
         if url is not None:
             # 2. Xử lý an toàn: Nếu url là đường dẫn ổ đĩa tuyệt đối (/home/thanh/...) thì phải dùng fromLocalFile
@@ -276,15 +330,6 @@ class MapEngine(QWebEngineView):
                 self.map_widget.load(QUrl(url))
             else:
                 self.map_widget.load(QUrl.fromLocalFile(url))
-
-        # Setup web channel for JS-Python communication
-        self.map_page = self.map_widget.page()
-        web_channel = QWebChannel(self.map_page)
-        self.map_page.setWebChannel(web_channel)
-        web_channel.registerObject("qtWidget", self)
-
-        # Connect initialization signal
-        self.map_widget.loadFinished.connect(self.onLoadFinished)
 
         # Initialize callback functions
         self.mapMovedCallback = None
