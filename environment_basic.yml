@@ -1,35 +1,49 @@
 name: uav
+
 channels:
   - conda-forge
   - defaults
+
 dependencies:
-  # --- Môi trường cơ sở ---
+  # Python
   - python=3.10
   - pip
-  - pyqt  # Cài qua conda để tránh lỗi giao diện C++
+
+  # ===== GUI (cài bằng Conda) =====
+  - pyqt=5.15.*
+  - pyqtwebengine
+  - geographiclib
+  - decorator
+  - qt-main
 
   - pip:
-      # --- Điều khiển UAV & Giao tiếp (Core) ---
+      # ===== UAV =====
       - mavsdk==3.15.3
       - pymavlink==2.4.49
       - pyserial==3.5
 
-      # --- AI & Xử lý ảnh (Đã thêm lại bộ Torch) ---
+      # ===== AI =====
       - torch
       - torchvision
       - torchaudio
       - ultralytics==8.4.37
+
+      # Nếu không dùng cv2.imshow() thì giữ headless
       - opencv-python-headless==4.13.0.92
+      # Nếu có dùng giao diện OpenCV thì thay bằng:
+      # - opencv-python==4.13.0.92
+
       - imutils==0.5.4
 
-      # --- Bản đồ & Tọa độ ---
+      # ===== Map =====
       - folium==0.20.0
       - shapely==2.1.2
 
-      # --- Giao diện, Bất đồng bộ & Tiện ích ---
+      # ===== Async =====
       - qasync==0.28.0
       - asyncqt==0.8.0
-      - PyQtWebEngine==5.15.7
+
+      # ===== Utils =====
       - pygame==2.6.1
       - pandas==2.3.3
       - tqdm==4.67.3

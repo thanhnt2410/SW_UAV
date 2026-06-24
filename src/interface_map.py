@@ -127,6 +127,15 @@ class Map(Interface):
             self.ovv_map.mapMovedCallback = self.onMapOvvMoved
             self.ovv_map.waitUntilReady()
 
+            # Initialize Simulation Map (non-interactive mirror like Overview)
+            self.sim_map = MapEngine(
+                name="Simulation Map",
+                widget=self.ui.Overview_map_view_2,
+                url=map_ovv_html_path,
+            )
+            self.sim_map.mapMovedCallback = self.onMapSimMoved
+            self.sim_map.waitUntilReady()
+
             # Set initial values in UI
             self.ui.noArea_line_edit.setText(str(self.noArea))
             self.ui.gridSize_line_edit.setText(str(self.gridSize))
@@ -243,6 +252,9 @@ class Map(Interface):
                 self.ovv_map.drawPolyLine(
                     path_key, [start, end], options=dict(color=color, weight=5)
                 )
+                self.sim_map.drawPolyLine(
+                    path_key, [start, end], options=dict(color=color, weight=5)
+                )
                 self.drone_paths_dict[path_key] = (start, end)
 
                 # Connect all remaining points in sequence
@@ -255,6 +267,9 @@ class Map(Interface):
                         path_key, [start, end], options=dict(color=color, weight=5)
                     )
                     self.ovv_map.drawPolyLine(
+                        path_key, [start, end], options=dict(color=color, weight=5)
+                    )
+                    self.sim_map.drawPolyLine(
                         path_key, [start, end], options=dict(color=color, weight=5)
                     )
                     self.drone_paths_dict[path_key] = (start, end)
@@ -332,6 +347,7 @@ class Map(Interface):
         for key, value in self.drone_markers_dict.items():
             self.rescue_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
             self.ovv_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
+            self.sim_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
 
             
     def process_grid_points(self, grid_points):
@@ -384,6 +400,7 @@ class Map(Interface):
             marker_id = f"A{area_index}P{i + 1}"
             self.rescue_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
             self.ovv_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
+            self.sim_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
             self.drone_markers_dict[marker_id] = point
 
         # Save points to file
@@ -555,6 +572,7 @@ class Map(Interface):
 
                 self.rescue_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
                 self.ovv_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
+                self.sim_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
                 self.drone_areas_dict[key] = polygon_points
 
                 # lưu file
@@ -604,6 +622,7 @@ class Map(Interface):
                 
                 self.rescue_map.drawPolygon(key=key, coordinates=area, options=area_options)
                 self.ovv_map.drawPolygon(key=key, coordinates=area, options=area_options)
+                self.sim_map.drawPolygon(key=key, coordinates=area, options=area_options)
                 self.drone_areas_dict[key] = area
 
                 # Save area to file
@@ -685,6 +704,12 @@ class Map(Interface):
                         **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 5, "height": 5})
                     )
                     self.ovv_map.addMarker(
+                        marker_key,
+                        float(point[0]),
+                        float(point[1]),
+                        **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 5, "height": 5})
+                    )
+                    self.sim_map.addMarker(
                         marker_key,
                         float(point[0]),
                         float(point[1]),
@@ -853,6 +878,7 @@ class Map(Interface):
             print("Main map moved to ", latitude, longitude, "Move Ovv map to the same position")
         try:
             self.ovv_map.centerAt(latitude, longitude)
+            self.sim_map.centerAt(latitude, longitude)
         except Exception as e:
             logger.log(repr(e), level="error")
 
@@ -861,6 +887,16 @@ class Map(Interface):
             print("Ovv map moved to ", latitude, longitude, "Move Main map to the same position")
         try:
             self.rescue_map.centerAt(latitude, longitude)
+            self.sim_map.centerAt(latitude, longitude)
+        except Exception as e:
+            logger.log(repr(e), level="error")
+
+    def onMapSimMoved(self, latitude, longitude) -> None:
+        if self.debug:
+            print("Sim map moved to ", latitude, longitude, "Move Main map to the same position")
+        try:
+            self.rescue_map.centerAt(latitude, longitude)
+            self.ovv_map.centerAt(latitude, longitude)
         except Exception as e:
             logger.log(repr(e), level="error")
 
@@ -905,11 +941,15 @@ class Map(Interface):
                 lon, lat = points
                 self.ovv_map.deleteMarker(type_name)
                 self.ovv_map.addMarker("Point", lat, lon, icon=DOT_ICON_PATH)
+                self.sim_map.deleteMarker(type_name)
+                self.sim_map.addMarker("Point", lat, lon, icon=DOT_ICON_PATH)
 
             elif type_name == "LineString":
                 points = [[float(lat), float(lon)] for lon, lat in points]
                 self.ovv_map.deletePolyLine(type_name)
                 self.ovv_map.drawPolyLine(type_name, points)
+                self.sim_map.deletePolyLine(type_name)
+                self.sim_map.drawPolyLine(type_name, points)
 
             elif type_name == "Polygon":
                 points = [[float(lat), float(lon)] for lon, lat in points[0]]
@@ -921,6 +961,8 @@ class Map(Interface):
                 # Display on overview map
                 self.ovv_map.deletePolygon(type_name)
                 self.ovv_map.drawPolygon(type_name, points)
+                self.sim_map.deletePolygon(type_name)
+                self.sim_map.drawPolygon(type_name, points)
 
             # Store the data
             self.geodata.setdefault(type_name, []).append(points)
@@ -946,24 +988,28 @@ class Map(Interface):
                     for key in self.drone_markers_dict:
                         self.rescue_map.deleteMarker(key)
                         self.ovv_map.deleteMarker(key)
+                        self.sim_map.deleteMarker(key)
                     self.drone_markers_dict = {}
                     
                 elif obj_type == 'paths' and self.drone_paths_dict:
                     for key in self.drone_paths_dict:
                         self.rescue_map.deletePolyLine(key)
                         self.ovv_map.deletePolyLine(key)
+                        self.sim_map.deletePolyLine(key)
                     self.drone_paths_dict = {}
                     
                 elif obj_type == 'areas' and self.drone_areas_dict:
                     for key in self.drone_areas_dict:
                         self.rescue_map.deletePolygon(key)
                         self.ovv_map.deletePolygon(key)
+                        self.sim_map.deletePolygon(key)
                     self.drone_areas_dict = {}
                     
                 elif obj_type == 'drones' and self.drone_initial_positions:
                     for key in self.drone_initial_positions:
                         self.rescue_map.deleteMarker(key)
                         self.ovv_map.deleteMarker(key)
+                        self.sim_map.deleteMarker(key)
                     self.drone_initial_positions = {}
                     
         except Exception as e:
@@ -1035,6 +1081,7 @@ class Map(Interface):
                         marker_key = f"uav_{drone_id}"
                         self.rescue_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
                         self.ovv_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
+                        self.sim_map.addMarker(key=marker_key, latitude=lat, longitude=lon, **marker_options)
                         self.drone_initial_positions[marker_key] = (lat, lon)
                         loaded_drones += 1
                     elif not init:
@@ -1060,6 +1107,7 @@ class Map(Interface):
                 }
                 self.rescue_map.addMarker(key=marker_key, latitude=default_lat, longitude=default_lon, **marker_options)
                 self.ovv_map.addMarker(key=marker_key, latitude=default_lat, longitude=default_lon, **marker_options)
+                self.sim_map.addMarker(key=marker_key, latitude=default_lat, longitude=default_lon, **marker_options)
                 self.drone_initial_positions[marker_key] = (default_lat, default_lon)
                 logger.warning("Using default drone position since no positions were loaded")
             
@@ -1071,6 +1119,7 @@ class Map(Interface):
                 first_pos = self.drone_position_list[0]
                 self.rescue_map.centerAt(first_pos[0], first_pos[1])
                 self.ovv_map.centerAt(first_pos[0], first_pos[1])
+                self.sim_map.centerAt(first_pos[0], first_pos[1])
             
             if self.debug:
                 print(f"Loaded {loaded_drones} drone positions, using {'initial' if init else 'current'} positions")
@@ -1089,6 +1138,7 @@ class Map(Interface):
             for key in self.drone_initial_positions.keys():
                 self.rescue_map.deleteMarker(key)
                 self.ovv_map.deleteMarker(key)
+                self.sim_map.deleteMarker(key)
             self.drone_initial_positions = {}
 
     def update_drone_positions(self):
@@ -1116,6 +1166,12 @@ class Map(Interface):
                 float(lon),
                 **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 10, "height": 10}),
             )
+            self.sim_map.addMarker(
+                "Marker" + str(ind),
+                float(lat),
+                float(lon),
+                **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 10, "height": 10}),
+            )
             if self.debug:
                 print(f"Added marker {ind} at {lat}, {lon}")
 
@@ -1126,6 +1182,9 @@ class Map(Interface):
                 "Line" + str(ind), [start, end], options=dict(color="yellow", weight=5)
             )
             self.ovv_map.drawPolyLine(
+                "Line" + str(ind), [start, end], options=dict(color="yellow", weight=5)
+            )
+            self.sim_map.drawPolyLine(
                 "Line" + str(ind), [start, end], options=dict(color="yellow", weight=5)
             )
             if self.debug:
@@ -1141,6 +1200,13 @@ class Map(Interface):
                 ),
             )
             self.ovv_map.drawPolygon(
+                "Area" + str(ind),
+                polygon,
+                options=dict(
+                    color="green", weight=2, fill=True, fillColor="green", fillOpacity=0.2
+                ),
+            )
+            self.sim_map.drawPolygon(
                 "Area" + str(ind),
                 polygon,
                 options=dict(

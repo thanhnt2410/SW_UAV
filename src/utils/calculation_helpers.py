@@ -1,8 +1,9 @@
 import math
 import random
 import numpy as np
-from shapely.geometry import LineString, Point, Polygon
-from sympy import Point, Polygon
+from shapely.geometry import LineString, Point as ShapelyPoint, Polygon as ShapelyPolygon
+from shapely import BufferCapStyle, BufferJoinStyle
+from sympy import Point as SympyPoint, Polygon as SympyPolygon
 
 EARTH_RADIUS = 6378137  # meters
 
@@ -60,7 +61,7 @@ def convert_to_lat_lon(ref_point, distance):
 
 def is_polygon_convex(points):
     """Check if a polygon defined by a list of points is convex."""
-    polygon = Polygon(*points)
+    polygon = SympyPolygon(*points)
     return polygon.is_convex()
 
 
@@ -928,7 +929,7 @@ def find_zigzag_path(points, uav_init_point):
     points_on_row = [[] for i in range(j+1)] 
     for i in range(j+1):
         points_on_row[i] = sub_list[i]
-        print(f"points_on_row{i+1}: ", points_on_row[i])
+        # print(f"points_on_row{i+1}: ", points_on_row[i])
 
     start_distance = distance_between_points(uav_init_point, points_on_row[0][0])
     end_distance = distance_between_points(uav_init_point, points_on_row[0][-1])
@@ -1371,40 +1372,103 @@ def astar_path_with_turns(points, start):
         curr = best_p
 
     return path
+
+def reduce_path_collinear(path):
+    """
+    Rút gọn một đường đi bằng cách loại bỏ các điểm trung gian nằm trên một đường thẳng.
+    Hàm này sẽ giữ lại điểm bắt đầu và điểm kết thúc của mỗi đoạn thẳng.
+    """
+    if len(path) < 3:
+        return path
+
+    reduced_path = [path[0]]
+    # Lặp qua các điểm, nhưng luôn so sánh với điểm cuối cùng trong đường đi đã rút gọn
+    for i in range(1, len(path) - 1):
+        # Kiểm tra xem điểm hiện tại (path[i]) có nằm trên đoạn thẳng tạo bởi
+        # điểm cuối cùng đã lưu (reduced_path[-1]) và điểm tiếp theo (path[i+1]) hay không.
+        if not point_on_line(reduced_path[-1], path[i], path[i+1]):
+            reduced_path.append(path[i])
+    
+    # Luôn luôn thêm điểm cuối cùng của đường đi gốc
+    reduced_path.append(path[-1])
+    
+    return reduced_path
 # Tinh toan chi phi:
-def calculate_cost_for_path(path, turn_angle_threshold_deg=1.0, turn_penalty=150.0):
+def calculate_cost_for_path(path, polygon_points=None, xy_polygon=None, cam_radius=10.0, weights=(1.0, 0.02, 0.5)):
     """
     path: danh sách các điểm [(lon, lat), (lon, lat), ...]
+    polygon_points: (Tùy chọn) danh sách các đỉnh polygon [(lon, lat), ...]
+    xy_polygon: (Tùy chọn) danh sách các đỉnh polygon ở hệ XY [(x,y), ...]. Ưu tiên hơn polygon_points.
+    weights: [alpha (turn), beta (length), gamma (overlap)] tương đương code MATLAB
     """
     if not path or len(path) == 1:
-        return 0.0, 0.0, 0  # cost, total_dist, turns
+        return float('inf'), 0.0, 0, 0.0, 0.0, 0.0, 0.0
 
-    total_dist = 0.0
-    turns = 0
-    last_dir = None
-
-    # Lấy điểm gốc làm tham chiếu tọa độ phẳng
     lon_ref, lat_ref = path[0]
+    # Chuyển đổi toàn bộ path sang tọa độ phẳng (X, Y) giống hệ ENU của MATLAB
+    xy_path = np.array([latlon_to_xy(lat_ref, lon_ref, lat, lon) for lon, lat in path])
+    # Tính các vector chênh lệch giữa các điểm liên tiếp
+    diffs = np.diff(xy_path, axis=0)
+    # 1. Tính chiều dài quỹ đạo (J_length)
+    seg_lengths = np.linalg.norm(diffs, axis=1)
+    j_length = np.sum(seg_lengths)
+    # 2. Tính góc quay (J_turn) tính bằng radian
+    headings = np.arctan2(diffs[:, 1], diffs[:, 0])
+    # WrapToPi: tương đương hàm wrapToPi_local trong MATLAB
+    d_heads = np.abs((np.diff(headings) + np.pi) % (2 * np.pi) - np.pi)
+    j_turn = np.sum(d_heads)
+    # Lưu thêm số lần quay bẻ góc > 1 độ để hiển thị (tương đương turnCount trong MATLAB)
+    turn_count = np.sum(d_heads > np.radians(1.0))
+    # 3. Tính diện tích quét và tỉ lệ chồng lấn (J_overlap) - GIỮ NGUYÊN
+    # 4. Tính diện tích quét thực tế và độ bao phủ
+    if xy_polygon is None:
+        if polygon_points is None:
+            raise ValueError("Cần cung cấp polygon_points hoặc xy_polygon")
+        xy_polygon = np.array([
+            latlon_to_xy(lat_ref, lon_ref, lat, lon)
+            for lon, lat in polygon_points
+        ])
 
-    for i in range(1, len(path)):
-        lon1, lat1 = path[i - 1]
-        lon2, lat2 = path[i]
-        d = haversine(lat1, lon1, lat2, lon2)  # ✅ gọi đúng kiểu bạn định nghĩa
-        total_dist += d
+    polygon = ShapelyPolygon(xy_polygon) # Tạo đa giác từ tọa độ XY
+    polygon_area = polygon.area          # Tính diện tích trực tiếp từ đa giác này
 
-        # --- 2️⃣ Tính hướng theo hệ tọa độ phẳng ---
-        p1 = latlon_to_xy(lat_ref, lon_ref, lat1, lon1)
-        p2 = latlon_to_xy(lat_ref, lon_ref, lat2, lon2)
-        new_dir = (p2[0] - p1[0], p2[1] - p1[1])
-      
-        if last_dir is not None:
-            ang = math.degrees(angle_between(last_dir, new_dir))
-            if ang > turn_angle_threshold_deg:
-                turns += 1
-        last_dir = new_dir
-
-    cost = total_dist + turns * turn_penalty
-    return cost, total_dist, turns
+    path_line = LineString(xy_path)
+    # sweep_region = path_line.buffer(cam_radius)
+    sweep_region = path_line.buffer(
+        cam_radius,
+        cap_style=BufferCapStyle.square,
+        join_style=BufferJoinStyle.mitre
+    )
+    covered_region = sweep_region.intersection(polygon)
+    covered_area = covered_region.area
+    coverage = covered_area / max(polygon_area, 1e-9) # Bây giờ cả hai diện tích đều nhất quán
+    
+    swept_area = j_length * 2 * cam_radius
+    j_overlap = swept_area / max(polygon_area, 1e-9) # Tính J_overlap sau khi có polygon_area chính xác
+    print(f"[DEBUG] Coverage Calculation: covered_area={covered_area:.2f} m², polygon_area={polygon_area:.2f} m², coverage_ratio={coverage:.4f}")
+    # 5. Diện tích chồng lấn
+    total_strip_area = 0.0
+    for i in range(len(xy_path)-1):
+        segment = LineString([xy_path[i], xy_path[i+1]])
+        total_strip_area += segment.buffer(cam_radius).area
+    overlap_area = max(
+        total_strip_area - sweep_region.area,
+        0.0
+    )
+    overlap_ratio = overlap_area / max(polygon_area, 1e-9)
+    # Tính hàm chi phí tổng. Chú ý: j_overlap vẫn được dùng trong công thức này.
+    j_total = weights[0] * j_turn + weights[1] * j_length + weights[2] * j_overlap
+    return (
+            j_total,          # cost
+            j_length,         # chiều dài
+            turn_count,       # số lần rẽ
+            swept_area,       # diện tích quét lý thuyết (L×2r)
+            covered_area,     # diện tích bao phủ thực tế
+            coverage,         # tỷ lệ bao phủ
+            j_overlap,        # chỉ số MATLAB cũ
+            overlap_area,     # diện tích chồng lấn
+            overlap_ratio     # tỷ lệ chồng lấn thực sự
+        )
 
 def best_path_sw_uav(points, uav_init_point):
     print("=== 🚀 Running find_zigzag_path to get start point ===")
@@ -1474,7 +1538,13 @@ def best_path_sw_uav(points, uav_init_point):
     for name, path in algos.items():
         if not path:
             continue
-        cost, total_dist, turns = calculate_cost_for_path(path)
+        # Cần tạo dummy polygon_points và area để hàm chạy, vì hàm này chỉ dùng để so sánh nội bộ
+        # các thuật toán với nhau, không phải để hiển thị ra giao diện.
+        dummy_polygon_points = points 
+        dummy_area = 1.0
+        cost, total_dist, turns, _, _, _, _ = calculate_cost_for_path(
+            path, polygon_points=dummy_polygon_points, polygon_area=dummy_area
+        )
         print(f"Algorithm {name}: cost={cost:.3f}, dist={total_dist:.3f}, turns={turns}")
         if cost < best_cost_val:
             best_cost_val = cost

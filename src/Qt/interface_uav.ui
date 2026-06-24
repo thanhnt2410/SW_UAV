@@ -66,7 +66,7 @@
        <enum>QFrame::WinPanel</enum>
       </property>
       <property name="currentIndex">
-       <number>1</number>
+       <number>0</number>
       </property>
       <widget class="QWidget" name="MainScreen">
        <property name="minimumSize">
@@ -246,6 +246,674 @@ background-color: rgb(252, 175, 62);</string>
             <property name="tabBarAutoHide">
              <bool>true</bool>
             </property>
+            <widget class="QWidget" name="Simulation">
+             <attribute name="title">
+              <string>Page</string>
+             </attribute>
+             <layout class="QGridLayout" name="gridLayout_9">
+              <item row="0" column="0" rowspan="2">
+               <widget class="QWebView" name="Overview_map_view_2">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>810</width>
+                  <height>729</height>
+                 </size>
+                </property>
+                <property name="tabletTracking">
+                 <bool>true</bool>
+                </property>
+                <property name="focusPolicy">
+                 <enum>Qt::ClickFocus</enum>
+                </property>
+                <property name="autoFillBackground">
+                 <bool>false</bool>
+                </property>
+                <property name="url">
+                 <url>
+                  <string>about:blank</string>
+                 </url>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="1">
+               <layout class="QHBoxLayout" name="horizontalLayout_22">
+                <item>
+                 <widget class="QGroupBox" name="groupBoxAlgorithms_2">
+                  <property name="title">
+                   <string>Algorithms</string>
+                  </property>
+                  <layout class="QVBoxLayout" name="verticalLayout_16">
+                   <item>
+                    <layout class="QVBoxLayout" name="verticalLayout_13">
+                     <item>
+                      <layout class="QVBoxLayout" name="verticalLayout_9">
+                       <item>
+                        <widget class="QCheckBox" name="zigzag_2">
+                         <property name="text">
+                          <string>Zizag</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="FindPath_2">
+                         <property name="text">
+                          <string>Find Path</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="NN2Opt_2">
+                         <property name="text">
+                          <string>Nearest Neighbor 2-Opt</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="SA_2">
+                         <property name="text">
+                          <string>Simulated Annealing</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="ACO_2">
+                         <property name="text">
+                          <string>ACO</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="GA_2">
+                         <property name="text">
+                          <string>GA</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="GA_with_1">
+                         <property name="text">
+                          <string>GA_with_turn</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="ABC_2">
+                         <property name="text">
+                          <string>ABC</string>
+                         </property>
+                        </widget>
+                       </item>
+                       <item>
+                        <widget class="QCheckBox" name="Improve_A_2">
+                         <property name="text">
+                          <string>Improved A* </string>
+                         </property>
+                        </widget>
+                       </item>
+                      </layout>
+                     </item>
+                     <item>
+                      <widget class="QLabel" name="runs_per_algorithm_2">
+                       <property name="text">
+                        <string>Runs per Algorithm</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QSpinBox" name="Num_run_2"/>
+                     </item>
+                    </layout>
+                   </item>
+                  </layout>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QGroupBox" name="groupBoxMapConfig_2">
+                  <property name="title">
+                   <string>Map Configuration</string>
+                  </property>
+                  <layout class="QGridLayout" name="gridLayout_2">
+                   <item row="8" column="0">
+                    <widget class="QPushButton" name="pushButton">
+                     <property name="text">
+                      <string>Run Simulation</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item row="0" column="0">
+                    <widget class="QLabel" name="label_25">
+                     <property name="text">
+                      <string>Map Type</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item row="2" column="0">
+                    <widget class="QGroupBox" name="groupBox_3">
+                     <property name="title">
+                      <string>Map Parameters</string>
+                     </property>
+                     <layout class="QVBoxLayout" name="verticalLayout_14">
+                      <item>
+                       <widget class="QStackedWidget" name="stackedMapParam_2">
+                        <property name="currentIndex">
+                         <number>1</number>
+                        </property>
+                        <widget class="QWidget" name="pageEqualSides_2">
+                         <layout class="QGridLayout" name="gridLayout_8">
+                          <item row="0" column="0">
+                           <widget class="QLabel" name="label_26">
+                            <property name="text">
+                             <string>TextLabel</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item row="0" column="1">
+                           <widget class="QSpinBox" name="spinBox_5"/>
+                          </item>
+                         </layout>
+                        </widget>
+                        <widget class="QWidget" name="pageRectangle_2">
+                         <layout class="QHBoxLayout" name="horizontalLayout_28">
+                          <item>
+                           <widget class="QLabel" name="label_27">
+                            <property name="text">
+                             <string>Width</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item>
+                           <widget class="QSpinBox" name="spinBox_6"/>
+                          </item>
+                          <item>
+                           <widget class="QLabel" name="label_28">
+                            <property name="text">
+                             <string>Height</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item>
+                           <widget class="QSpinBox" name="spinBox_7"/>
+                          </item>
+                         </layout>
+                        </widget>
+                        <widget class="QWidget" name="pageCircle_2">
+                         <layout class="QHBoxLayout" name="horizontalLayout_29">
+                          <item>
+                           <layout class="QHBoxLayout" name="horizontalLayout_30">
+                            <item>
+                             <widget class="QLabel" name="label_29">
+                              <property name="text">
+                               <string>Radius</string>
+                              </property>
+                             </widget>
+                            </item>
+                            <item>
+                             <widget class="QSpinBox" name="spinBox_8"/>
+                            </item>
+                           </layout>
+                          </item>
+                         </layout>
+                        </widget>
+                        <widget class="QWidget" name="pageRescue_2">
+                         <layout class="QVBoxLayout" name="verticalLayout_15">
+                          <item>
+                           <widget class="QLabel" name="label_30">
+                            <property name="text">
+                             <string>Available Rescue Maps</string>
+                            </property>
+                           </widget>
+                          </item>
+                          <item>
+                           <widget class="QComboBox" name="comboBox_4">
+                            <item>
+                             <property name="text">
+                              <string>Current Rescue Map</string>
+                             </property>
+                            </item>
+                            <item>
+                             <property name="text">
+                              <string>Choose from ...</string>
+                             </property>
+                            </item>
+                           </widget>
+                          </item>
+                         </layout>
+                        </widget>
+                       </widget>
+                      </item>
+                     </layout>
+                    </widget>
+                   </item>
+                   <item row="1" column="0">
+                    <widget class="QComboBox" name="comboBox_3">
+                     <item>
+                      <property name="text">
+                       <string>Square</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Rectangle</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Circle</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Pentagon</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Hexagon</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Rescue</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Custom</string>
+                      </property>
+                     </item>
+                    </widget>
+                   </item>
+                   <item row="5" column="0">
+                    <widget class="QCheckBox" name="Reduce_Points">
+                     <property name="text">
+                      <string>Reduce Points</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item row="6" column="0">
+                    <widget class="QCheckBox" name="All_UAVs">
+                     <property name="text">
+                      <string>All UAVs</string>
+                     </property>
+                    </widget>
+                   </item>
+                  </layout>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QGroupBox" name="groupBoxUAVProgress_2">
+                  <property name="title">
+                   <string>UAV Progress</string>
+                  </property>
+                  <layout class="QVBoxLayout" name="verticalLayout_26">
+                   <item>
+                    <layout class="QGridLayout" name="gridLayout_7">
+                     <item row="1" column="1">
+                      <widget class="QLabel" name="label_19">
+                       <property name="text">
+                        <string>UAV 2</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="0" column="2">
+                      <widget class="QProgressBar" name="progressUAV1_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="0" column="3">
+                      <widget class="QLabel" name="progressLabel1_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="0" column="1">
+                      <widget class="QLabel" name="label_20">
+                       <property name="text">
+                        <string>UAV 1</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="2" column="1">
+                      <widget class="QLabel" name="label_21">
+                       <property name="text">
+                        <string>UAV 3</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="2" column="3">
+                      <widget class="QLabel" name="progressLabel3_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="1" column="2">
+                      <widget class="QProgressBar" name="progressUAV2_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="2" column="2">
+                      <widget class="QProgressBar" name="progressUAV3_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="3" column="3">
+                      <widget class="QLabel" name="progressLabel4_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="4" column="3">
+                      <widget class="QLabel" name="progressLabel5_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="1" column="3">
+                      <widget class="QLabel" name="progressLabel2_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="3" column="1">
+                      <widget class="QLabel" name="label_22">
+                       <property name="text">
+                        <string>UAV 4</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="4" column="1">
+                      <widget class="QLabel" name="label_23">
+                       <property name="text">
+                        <string>UAV 5</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="4" column="2">
+                      <widget class="QProgressBar" name="progressUAV5_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="3" column="2">
+                      <widget class="QProgressBar" name="progressUAV4_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="5" column="3">
+                      <widget class="QLabel" name="progressLabel6_2">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="5" column="1">
+                      <widget class="QLabel" name="label_24">
+                       <property name="text">
+                        <string>UAV 6</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="5" column="2">
+                      <widget class="QProgressBar" name="progressUav6_2">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
+                   <item>
+                    <layout class="QHBoxLayout" name="horizontalLayout_31">
+                     <item>
+                      <widget class="QLabel" name="label_31">
+                       <property name="text">
+                        <string>Progress</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QProgressBar" name="progressBar">
+                       <property name="value">
+                        <number>24</number>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QLabel" name="label_32">
+                       <property name="text">
+                        <string>0/0</string>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
+                  </layout>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QGroupBox" name="groupBox_bestAlgorithm">
+                  <property name="title">
+                   <string>Best Algorithm Summary</string>
+                  </property>
+                  <layout class="QVBoxLayout" name="verticalLayout_27">
+                   <item>
+                    <widget class="QLabel" name="label_42">
+                     <property name="text">
+                      <string>No simulation result available.</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item>
+                    <widget class="QPushButton" name="pushButton_2">
+                     <property name="text">
+                      <string>Detailed Analysis</string>
+                     </property>
+                    </widget>
+                   </item>
+                  </layout>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+              <item row="1" column="1">
+               <widget class="QGroupBox" name="groupBox_5">
+                <property name="title">
+                 <string>Algorithm Comparison</string>
+                </property>
+                <layout class="QVBoxLayout" name="verticalLayout_8">
+                 <item>
+                  <widget class="QTableWidget" name="tableWidgetAlgorithmComparison">
+                   <property name="autoFillBackground">
+                    <bool>false</bool>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true"/>
+                   </property>
+                   <property name="rowCount">
+                    <number>9</number>
+                   </property>
+                   <property name="columnCount">
+                    <number>10</number>
+                   </property>
+                   <attribute name="horizontalHeaderCascadingSectionResizes">
+                    <bool>false</bool>
+                   </attribute>
+                   <attribute name="horizontalHeaderShowSortIndicator" stdset="0">
+                    <bool>false</bool>
+                   </attribute>
+                   <attribute name="horizontalHeaderStretchLastSection">
+                    <bool>false</bool>
+                   </attribute>
+                   <attribute name="verticalHeaderVisible">
+                    <bool>false</bool>
+                   </attribute>
+                   <row>
+                    <property name="text">
+                     <string/>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string/>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
+                   <column>
+                    <property name="text">
+                     <string>Algorithm</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Avg Cost</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Coverage</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Swept Area</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Energy</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Time</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Path</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Overlap</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Turns</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Score</string>
+                    </property>
+                   </column>
+                   <item row="0" column="0">
+                    <property name="text">
+                     <string>Zigzag</string>
+                    </property>
+                   </item>
+                   <item row="1" column="0">
+                    <property name="text">
+                     <string>Find Path</string>
+                    </property>
+                   </item>
+                   <item row="2" column="0">
+                    <property name="text">
+                     <string>NN 2-Opt</string>
+                    </property>
+                   </item>
+                   <item row="3" column="0">
+                    <property name="text">
+                     <string>SA</string>
+                    </property>
+                   </item>
+                   <item row="4" column="0">
+                    <property name="text">
+                     <string>ACO</string>
+                    </property>
+                   </item>
+                   <item row="5" column="0">
+                    <property name="text">
+                     <string>GA</string>
+                    </property>
+                   </item>
+                   <item row="6" column="0">
+                    <property name="text">
+                     <string>GA_with_turn</string>
+                    </property>
+                   </item>
+                   <item row="7" column="0">
+                    <property name="text">
+                     <string>ABC</string>
+                    </property>
+                   </item>
+                   <item row="8" column="0">
+                    <property name="text">
+                     <string>Improved A*</string>
+                    </property>
+                   </item>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+             </layout>
+            </widget>
             <widget class="QWidget" name="tab_all_uav_screens">
              <attribute name="title">
               <string>All</string>
@@ -11025,35 +11693,21 @@ QPushButton::pressed{background-color: rgb(255, 0, 0);}</string>
      <x>0</x>
      <y>0</y>
      <width>1920</width>
-     <height>20</height>
+     <height>22</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuView">
     <property name="title">
      <string>Page view</string>
     </property>
-    <widget class="QMenu" name="menuScreen_0_Main_Page">
-     <property name="layoutDirection">
-      <enum>Qt::RightToLeft</enum>
-     </property>
-     <property name="title">
-      <string>UAV views</string>
-     </property>
-     <addaction name="actionOverview"/>
-     <addaction name="actionUAV_1_view"/>
-     <addaction name="actionUAV_2_view"/>
-     <addaction name="actionUAV_3_view"/>
-     <addaction name="actionUAV_4_view"/>
-     <addaction name="actionUAV_5_view"/>
-     <addaction name="actionUAV_6_view"/>
-    </widget>
-    <addaction name="menuScreen_0_Main_Page"/>
     <addaction name="separator"/>
     <addaction name="separator"/>
+    <addaction name="actionUAVs_View"/>
     <addaction name="actionScreen_7_Rescue_map"/>
     <addaction name="actionScreen_10_Settings"/>
     <addaction name="separator"/>
     <addaction name="actionScreen_11_Overview"/>
+    <addaction name="actionScreen_12_Simulation"/>
    </widget>
    <addaction name="menuView"/>
   </widget>
@@ -11095,7 +11749,7 @@ QPushButton::pressed{background-color: rgb(255, 0, 0);}</string>
     <string>UAV 1 view</string>
    </property>
   </action>
-  <action name="actionUAV_2_view">
+  <action name="action">
    <property name="text">
     <string>UAV 2 view</string>
    </property>
@@ -11118,6 +11772,16 @@ QPushButton::pressed{background-color: rgb(255, 0, 0);}</string>
   <action name="actionUAV_6_view">
    <property name="text">
     <string>UAV 6 view</string>
+   </property>
+  </action>
+  <action name="actionScreen_12_Simulation">
+   <property name="text">
+    <string>Simulation</string>
+   </property>
+  </action>
+  <action name="actionUAVs_View">
+   <property name="text">
+    <string>UAVs View</string>
    </property>
   </action>
  </widget>

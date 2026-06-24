@@ -206,6 +206,12 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         # Configure initial status indicators
         self._update_status_indicators()
+        
+        # Mở rộng giới hạn nhập cho các ô kích thước map (mặc định Qt chỉ cho nhập đến 99)
+        self.ui.spinBox_5.setMaximum(10000)
+        self.ui.spinBox_6.setMaximum(10000)
+        self.ui.spinBox_7.setMaximum(10000)
+        self.ui.spinBox_8.setMaximum(10000)
 
     def _init_event_handlers(self) -> None:
         """
@@ -270,8 +276,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.ui.btn_connect: lambda: self.uav_connect_callback(self.active_tab_index),
             self.ui.btn_rtl: lambda: self.uav_return_callback(self.active_tab_index, rtl=True),
             self.ui.btn_return: lambda: self.uav_return_callback(self.active_tab_index, rtl=False),
-            self.ui.btn_mission: lambda: self.uav_mission_callback(self.active_tab_index),
-            self.ui.btn_send_coordinate: lambda: self.send_coordinate() #gui tin nhan
+            self.ui.btn_mission: lambda: self.uav_mission_callback(self.active_tab_index)
         }
         
         # Connect main control buttons
@@ -301,6 +306,16 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         # Connect GoTo navigation buttons
         self._connect_goto_buttons()
+        
+        # Connect Simulation button
+        self.ui.pushButton.clicked.connect(
+            lambda: asyncio.create_task(self.run_simulation_callback())
+        )
+        
+        # Đồng bộ Combobox Map Type với giao diện nhập tham số tương ứng
+        self.ui.comboBox_3.currentIndexChanged.connect(self._on_map_type_changed)
+        # Chạy 1 lần lúc khởi động để đồng bộ giao diện
+        self._on_map_type_changed(self.ui.comboBox_3.currentIndex())
         
     def _connect_parameter_buttons(self) -> None:
         """
@@ -1340,7 +1355,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             
             await self.uav_fn_rescue()
             
-    async def _execute_standard_mission(self, uav_index):
+    async def _execute_standard_mission(self, uav_index, plan_file=None):
         """Execute a standard mission for a regular UAV."""
         # Skip if UAV is not connected or not allowed
         if not self._check_uav_connection(uav_index):
@@ -1365,15 +1380,19 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             if self.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
             
-            # Execute mission from plan file
-            # await uav_fn_do_mission(
-            #     drone=UAVs[uav_index],
-            #     mission_plan_file=f"{__current_path__}/logs/points/reduced_point{uav_index}.txt",
-            # )
+            if plan_file is None:
+                plan_file = f"{__current_path__}/logs/points/reduced_point{uav_index}.plan"
+                
+            self.update_terminal(f"[INFO] Bắt đầu nạp {plan_file} và tiến hành cất cánh...", uav_index=0)
+            progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
+                
             await uav_fn_do_mission(
                 drone=UAVs[uav_index],
-                mission_plan_file=f"{__current_path__}/logs/points/reduced_point{uav_index}.plan",
+                mission_plan_file=plan_file,
             )
+            
+            if not progress_task.done():
+                progress_task.cancel()
             # Update display
             self._update_uav_info_display(uav_index)
             
@@ -2409,7 +2428,479 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         )
         self.update_terminal(detection_msg, 0)
         logger.log(detection_msg, level="info")
+
+    async def monitor_mission_progress(self, uav_index):
+        """Monitor mission progress and update the UI progress bar for the given UAV."""
+        global UAVs
+        try:
+            progress_bars = [
+                self.ui.progressUAV1_2, self.ui.progressUAV2_2, self.ui.progressUAV3_2,
+                self.ui.progressUAV4_2, self.ui.progressUAV5_2, self.ui.progressUav6_2
+            ]
+            labels = [
+                self.ui.progressLabel1_2, self.ui.progressLabel2_2, self.ui.progressLabel3_2,
+                self.ui.progressLabel4_2, self.ui.progressLabel5_2, self.ui.progressLabel6_2
+            ]
+            
+            if not (1 <= uav_index <= 6): return
+                
+            bar = progress_bars[uav_index - 1]
+            label = labels[uav_index - 1]
+            
+            bar.setValue(0)
+            label.setText("0/0")
+            
+            while True:
+                try:
+                    async for progress in UAVs[uav_index]["system"].mission.mission_progress():
+                        current = progress.current
+                        total = progress.total
+                        if total > 0:
+                            bar.setMaximum(total)
+                            bar.setValue(current)
+                            if current == total:
+                                label.setText(f"Finished ({total})")
+                            else:
+                                label.setText(f"{current}/{total}")
+                except Exception:
+                    pass
+                await asyncio.sleep(1) # Tránh dùng float vì gây lỗi startTimer trong asyncqt
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error monitoring mission progress for UAV {uav_index}: {e}")
+
+    def _on_map_type_changed(self, index):
+        """Đổi form nhập liệu tương ứng khi chọn Map Type."""
+        if index in [0, 3, 4]:  # Square, Pentagon, Hexagon dùng chung trang 1 tham số
+            self.ui.stackedMapParam_2.setCurrentIndex(0)
+            if index == 0:
+                self.ui.label_26.setText("Side Length (m)")
+            else:
+                self.ui.label_26.setText("Radius (m)")
+        elif index == 1:  # Rectangle
+            self.ui.stackedMapParam_2.setCurrentIndex(1)
+        elif index == 2:  # Circle
+            self.ui.stackedMapParam_2.setCurrentIndex(2)
+        elif index == 5:  # Rescue
+            self.ui.stackedMapParam_2.setCurrentIndex(3)
+
+    # ------------------------------------< Simulation Functions >-----------------------------
+    async def run_simulation_callback(self):
+        """
+        Handles the 'Run Simulation' button click event.
+        - Generates a mission area based on UI settings.
+        - Creates grid points within that area.
+        - Runs selected pathfinding algorithms.
+        - Displays results in the comparison table and on the simulation map.
+        """
         
+        # Kiểm tra kết nối UAV 1 ngay từ đầu trước khi tính toán
+        if not self._check_uav_connection(1, strictly=True):
+            self.update_terminal("[SIM] UAV 1 is not connected. Simulation aborted.", 0)
+            self.popup_msg("Vui lòng Connect UAV 1 trước khi chạy Simulation!", "Simulation", "Warning")
+            return
+            
+        self.update_terminal("[SIM] Starting simulation...", 0)
+
+        # 1. Clear previous results
+        self.sim_map.runScript("""
+            if (typeof map !== 'undefined') {
+                map.eachLayer(function (layer) {
+                    if (layer instanceof L.Marker || layer instanceof L.Polygon || layer instanceof L.Polyline) {
+                        map.removeLayer(layer);
+                    }
+                });
+            }
+        """)
+        
+        # Clear only data columns, keep algorithm names in column 0
+        for row in range(self.ui.tableWidgetAlgorithmComparison.rowCount()):
+            for col in range(1, self.ui.tableWidgetAlgorithmComparison.columnCount()):
+                self.ui.tableWidgetAlgorithmComparison.setItem(row, col, QtWidgets.QTableWidgetItem(""))
+        map_type = self.ui.comboBox_3.currentText()
+        num_runs = self.ui.Num_run_2.value()
+        if num_runs <= 0: num_runs = 1
+        try:
+            grid_size = float(self.ui.gridSize_line_edit.text()) # Lấy tạm grid size từ tab map
+            if grid_size <= 0: grid_size = 10.0
+        except ValueError:
+            grid_size = 10.0
+        
+        # Lấy danh sách thuật toán được chọn
+        selected_algos = []
+        if self.ui.zigzag_2.isChecked(): selected_algos.append("Zigzag")
+        if self.ui.FindPath_2.isChecked(): selected_algos.append("Find_Path")
+        if self.ui.NN2Opt_2.isChecked(): selected_algos.append("NN_2opt")
+        if self.ui.SA_2.isChecked(): selected_algos.append("SA")
+        if self.ui.ACO_2.isChecked(): selected_algos.append("ACO")
+        if self.ui.GA_2.isChecked(): selected_algos.append("GA")
+        if self.ui.GA_with_1.isChecked(): selected_algos.append("GA_with_turn")
+        if self.ui.ABC_2.isChecked(): selected_algos.append("ABC")
+        if self.ui.Improve_A_2.isChecked(): selected_algos.append("A*_Improved")
+
+        # Lấy trạng thái của checkbox reduce_points
+        reduce_points_enabled = self.ui.Reduce_Points.isChecked()
+
+        if not selected_algos:
+            self.popup_msg("Please select at least one algorithm.", "Simulation", "Warning")
+            return
+            
+        total_runs = len(selected_algos) * num_runs
+        current_run = 0
+        self.ui.progressBar.setMaximum(total_runs)
+        self.ui.progressBar.setValue(0)
+        self.ui.label_32.setText(f"0/{total_runs}")
+        await asyncio.sleep(0) # Ép giao diện render ngay lập tức trạng thái 0/x trước khi thuật toán chạy
+
+        poly_area_m2 = 1.0  # Default fallback
+        xy_polygon_for_calc = [] # Khởi tạo biến ở đây
+        # Lấy vị trí UAV 1 làm trung tâm và điểm xuất phát
+        center_lat = UAVs[1]["init_params"]["latitude"]
+        center_lon = UAVs[1]["init_params"]["longitude"]
+        start_coord = (center_lat, center_lon)
+
+        # 3. Generate mission area (polygon)
+        try:
+            # Focus bản đồ mô phỏng vào khu vực này
+            self.sim_map.centerAt(center_lat, center_lon)
+            self.sim_map.setZoom(18)
+
+            if map_type == "Square":
+                side = self.ui.spinBox_5.value()
+                if side <= 0: side = 100.0  # Mặc định 100m
+                # Tạo 4 góc của hình vuông
+                half_side = side / 2.0
+                p1 = calculate_new_lat_lon(center_lat, center_lon, half_side, -half_side)  # Top-left
+                p2 = calculate_new_lat_lon(center_lat, center_lon, half_side, half_side)   # Top-right
+                p3 = calculate_new_lat_lon(center_lat, center_lon, -half_side, half_side)  # Bottom-right
+                p4 = calculate_new_lat_lon(center_lat, center_lon, -half_side, -half_side) # Bottom-left
+                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                # Tạo hình vuông XY gốc để tính toán chính xác
+                xy_polygon_for_calc = [
+                    (-half_side, half_side), (half_side, half_side),
+                    (half_side, -half_side), (-half_side, -half_side)
+                ]
+            elif map_type == "Rectangle":
+                width = self.ui.spinBox_6.value()
+                height = self.ui.spinBox_7.value()
+                if width <= 0: width = 100.0
+                if height <= 0: height = 100.0
+                half_w, half_h = width / 2.0, height / 2.0
+                p1 = calculate_new_lat_lon(center_lat, center_lon, half_h, -half_w) # Top-left
+                p2 = calculate_new_lat_lon(center_lat, center_lon, half_h, half_w)  # Top-right
+                p3 = calculate_new_lat_lon(center_lat, center_lon, -half_h, half_w) # Bottom-right
+                p4 = calculate_new_lat_lon(center_lat, center_lon, -half_h, -half_w)# Bottom-left
+                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                # Tạo hình chữ nhật XY gốc để tính toán chính xác
+                xy_polygon_for_calc = [
+                    (-half_w, half_h), (half_w, half_h),
+                    (half_w, -half_h), (-half_w, -half_h)
+                ]
+            else:
+                self.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
+                return
+
+            # Vẽ vùng bay lên bản đồ sim
+            self.sim_map.drawPolygon("sim_area", polygon_vertices, options={'color': 'blue', 'fillOpacity': 0.1})
+
+            # 4. Generate grid points
+            cartesian_poly = convert_to_cartesian(polygon_vertices)
+            grid_points_cartesian = generate_grid(cartesian_poly, grid_size)
+            
+            # Chuyển đổi điểm grid về lại Lat/Lon
+            ref_lat = min(p[0] for p in polygon_vertices)
+            ref_lon = min(p[1] for p in polygon_vertices)
+            grid_points_latlon = [convert_to_lat_lon((ref_lat, ref_lon), p) for p in grid_points_cartesian]
+            
+            if not grid_points_latlon or len(grid_points_latlon) < 2:
+                self.popup_msg("Vùng sinh quá bé hoặc Grid Size quá lớn, không đủ tạo điểm bay!", "Simulation", "Warning")
+                self.update_terminal("[SIM] Simulation aborted: Not enough points.", 0)
+                return
+
+            # Vẽ các điểm grid lên bản đồ sim
+            marker_options = {
+                'icon': str(DOT_ICON_PATH), 
+                'iconSize': {'width': 5, 'height': 5},
+                'title': ' '  # Truyền khoảng trắng để ép bản đồ ẩn tên điểm (tooltip) đi
+            }
+            for i, p in enumerate(grid_points_latlon):
+                        self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
+            
+
+        except Exception as e:
+            self.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
+            logger.error(f"[SIM] Error generating map/grid: {e}")
+            return
+
+        # 5. Run algorithms and display results
+        self.update_terminal(f"[SIM] Running {len(selected_algos)} algorithms, {num_runs} runs each...", 0)
+        await asyncio.sleep(0) # Nhường quyền cho event loop in log ra màn hình trước
+        
+        algo_map = {
+            "Zigzag": lambda pts, start: find_zigzag_path(pts, start)[0],
+            "Find_Path": find_path_0,
+            "NN_2opt": nn_2opt_path,
+            "SA": sa_path,
+            "ACO": aco_path,
+            "GA": ga_path,
+            "GA_with_turn": ga_path_with_turns,
+            "A*_Improved": astar_path_with_turns,
+            "ABC": abc_path
+        }
+        
+        algo_to_row = {
+            "Zigzag": 0,
+            "Find_Path": 1,
+            "NN_2opt": 2,
+            "SA": 3,
+            "ACO": 4,
+            "GA": 5,
+            "GA_with_turn": 6,
+            "A*_Improved": 7
+        }
+
+        best_overall_score = float('inf')
+        best_overall_path = None
+        best_overall_algo = ""
+        
+        # Lấy cao độ mặc định và tọa độ ban đầu của UAV 1
+        uav_alt = UAVs[1]["init_params"].get("altitude", 10.0)
+
+        for algo_name in selected_algos:
+            if algo_name not in algo_map:
+                continue
+            
+            # Thêm total_overlap_ratio để tính toán giá trị mới
+            total_cost, total_dist, total_turns, total_swept, total_coverage, total_overlap_ratio = 0, 0, 0, 0, 0, 0
+            total_flight_time = 0
+            total_battery_drop = 0
+            current_best_path_for_algo = []
+
+            try:
+                for run_idx in range(num_runs): # type: ignore
+                    self.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
+                    await asyncio.sleep(0)
+                    
+                    # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC
+                    path = algo_map[algo_name](grid_points_latlon.copy(), start_coord)
+                    if path and (abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7):
+                        path.insert(0, start_coord)
+
+                    cost, dist, turns, swept_area, _, coverage, _, _, overlap_ratio = calculate_cost_for_path( # type: ignore
+                        path, 
+                        xy_polygon=xy_polygon_for_calc, # Truyền trực tiếp đa giác XY
+                        cam_radius=10.0
+                    )
+                    
+                    # Cộng dồn các giá trị để tính trung bình
+                    total_cost += cost
+                    total_dist += dist
+                    total_turns += turns
+                    total_swept += swept_area
+                    total_coverage += coverage
+                    total_overlap_ratio += overlap_ratio
+                    current_best_path_for_algo = path
+                    
+                    # Vẽ tạm đường đi dự kiến lên bản đồ màu cam nhạt
+                    self.sim_map.drawPolyLine("current_run_path", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.5})
+
+                    # # LOGIC MỚI: Nếu reduce points được chọn, xử lý trước tập điểm bay
+                    # if reduce_points_enabled:
+                    #     self.update_terminal("[SIM] Reduce Points is enabled. Pre-processing grid points...", 0)
+                    #     # a. Tạo một đường đi mặc định (zigzag) qua các điểm grid
+                    #     default_path, _ = find_zigzag_path(grid_points_latlon.copy(), start_coord)
+                        
+                    #     # b. Rút gọn đường đi này
+                    #     original_point_count = len(default_path)
+                    #     reduced_path_points = reduce_path_collinear(default_path)
+                    #     reduced_point_count = len(reduced_path_points)
+                    #     self.update_terminal(f"[SIM] Grid points reduced from {original_point_count} to {reduced_point_count} waypoints.", 0)
+
+                    #     # c. Các điểm đã rút gọn trở thành tập điểm bay mới cho tất cả thuật toán
+                    #     grid_points_latlon = reduced_path_points
+
+                    # # Xóa các marker cũ trên bản đồ mô phỏng trước khi vẽ các điểm mới
+                    # self.sim_map.runScript("if (typeof map !== 'undefined') { map.eachLayer(function (l) { if (l instanceof L.Marker) { map.removeLayer(l); } }); }")
+                    # await asyncio.sleep(0) # Đợi một chút để map kịp xóa (dùng số 0 thay cho 0.1 để tránh lỗi float của PyQt)
+
+                    # for i, p in enumerate(grid_points_latlon):
+                    #     self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
+                    
+                    # 2. XUẤT TỌA ĐỘ RA FILE
+                    sim_plan_file = os.path.join(__current_path__, "logs", "points", "simulation_path.txt")
+                    os.makedirs(os.path.dirname(sim_plan_file), exist_ok=True)
+                    with open(sim_plan_file, "w") as f:
+                        for pt in path:
+                            f.write(f"{pt[0]},{pt[1]},{uav_alt}\n")
+                            
+                    # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
+                    # Ghi nhận thời gian và pin trước khi cất cánh
+                    start_time = time.time()
+                    batt_str = UAVs[1]["status"].get("battery_status", "100%")
+                    start_battery = float(batt_str.replace('%', '')) if '%' in batt_str else 100.0
+                    
+                    # Kích hoạt chuyến bay khép kín (đợi cho tới khi nó hạ cánh hẳn mới đi tiếp)
+                    await self._run_single_sim_flight(1, sim_plan_file)
+                    
+                    # Ghi nhận thời gian và pin sau khi hạ cánh
+                    end_time = time.time()
+                    batt_str = UAVs[1]["status"].get("battery_status", "100%")
+                    end_battery = float(batt_str.replace('%', '')) if '%' in batt_str else start_battery
+                    
+                    flight_time = end_time - start_time
+                    
+                    # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
+                    # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
+                    battery_drop = (flight_time * 0.15) + (turns * 0.05)
+                    
+                    total_flight_time += flight_time
+                    total_battery_drop += battery_drop
+                    self.update_terminal(f"[SIM] Kết quả lượt {run_idx+1}: Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%", 0)
+                    
+                    # 4. CẬP NHẬT GIAO DIỆN
+                        
+                    current_run += 1
+                    self.ui.progressBar.setValue(current_run)
+                    self.ui.label_32.setText(f"{current_run}/{total_runs}")
+                    await asyncio.sleep(0)
+                    
+                    if current_run < total_runs:
+                        self.update_terminal("[SIM] Đợi 5 giây làm nguội trước khi cất cánh lượt tiếp theo...", 0)
+                        await asyncio.sleep(5)
+
+                # 5. TÍNH TRUNG BÌNH & ĐIỀN VÀO BẢNG TỔNG KẾT
+                if num_runs > 0:
+                    avg_cost = total_cost / num_runs
+                    avg_dist = total_dist / num_runs
+                    avg_turns = total_turns / num_runs
+                    avg_time = total_flight_time / num_runs
+                    avg_battery = total_battery_drop / num_runs
+                    avg_swept = total_swept / num_runs
+                    avg_coverage = total_coverage / num_runs
+                    avg_overlap = total_overlap_ratio / num_runs
+
+                    row = algo_to_row.get(algo_name)
+                    if row is not None:
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{avg_cost:.2f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{avg_coverage:.3f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{avg_swept:.2f} m²"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{avg_battery:.2f}%"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{avg_time:.1f} s"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 6, QtWidgets.QTableWidgetItem(f"{avg_dist:.2f} m"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 7, QtWidgets.QTableWidgetItem(f"{avg_overlap:.3f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 8, QtWidgets.QTableWidgetItem(f"{avg_turns:.1f}"))
+                        
+                        # Tính điểm tổng hợp (Score): Kết hợp Cost thuật toán và Mức tiêu thụ mô phỏng thực tế
+                        score = avg_cost + (avg_time * 0.1) + (avg_battery * 10)
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 9, QtWidgets.QTableWidgetItem(f"{score:.1f}"))
+                        
+                        # Cập nhật xem thuật toán nào đang vô địch về Score
+                        if score < best_overall_score:
+                            best_overall_score = score
+                            best_overall_algo = algo_name
+                            best_overall_path = current_best_path_for_algo
+            except Exception as e:
+                self.update_terminal(f"[SIM] Lỗi thuật toán {algo_name}: {e}", 0)
+                logger.error(f"[SIM] Error in algorithm {algo_name}: {e}")
+                continue
+
+        # 6. HOÀN TẤT & VẼ KẾT QUẢ TỐT NHẤT LÊN BẢN ĐỒ
+        # Xoá đường màu cam nhạt để vẽ đường chính thức
+        self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
+        
+        if best_overall_path:
+            self.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5})
+            self.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
+            self.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
+            self.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
+        else:
+            self.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
+        
+    async def _run_single_sim_flight(self, uav_index, plan_file):
+        """
+        Tiến trình thực thi một vòng bay khép kín (Laps):
+        Upload -> Cất cánh -> Theo lộ trình -> RTL -> Chờ chạm đất & Disarm.
+        Hàm này sẽ khóa (block) các tác vụ sau nó cho tới khi UAV hoàn toàn nằm yên dưới mặt đất.
+        """
+        try:
+            UAVs[uav_index]["status"]["on_mission"] = True
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Pause")
+                
+            # Khởi chạy progress bar bay
+            progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
+            
+            # Task ngầm: Liên tục kiểm tra xem bay hết điểm chưa để bắn lệnh về
+            async def auto_rtl_when_finished():
+                while UAVs[uav_index]["status"].get("on_mission", False):
+                    try:
+                        if await UAVs[uav_index]["system"].mission.is_mission_finished():
+                            self.update_terminal(f"[SIM] UAV {uav_index} hoàn tất các điểm, đang tự động quay về (RTL)...", 0)
+                            await UAVs[uav_index]["system"].action.return_to_launch()
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+            
+            rtl_task = asyncio.create_task(auto_rtl_when_finished())
+            
+            # Kích hoạt hàm cất cánh và bay (hàm uav_fn_do_mission sẽ tự động block cho đến khi UAV đáp đất hoàn toàn)
+            self.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
+            await uav_fn_do_mission(drone=UAVs[uav_index], mission_plan_file=plan_file)
+            
+            # Hủy các task ngầm khi chuyến bay đã kết thúc
+            if not rtl_task.done(): rtl_task.cancel()
+            if not progress_task.done(): progress_task.cancel()
+            
+            # Khôi phục nút UI
+            UAVs[uav_index]["status"]["on_mission"] = False
+            if self.active_tab_index == uav_index:
+                self._set_pause_button_style("Resume")
+                
+            # QUAN TRỌNG: Đợi UAV xả động cơ (Disarm) hoàn toàn để reset hệ thống trước vòng lặp sau
+            self.update_terminal(f"[SIM] Đợi UAV {uav_index} xả động cơ (Disarm) an toàn...", 0)
+            while True:
+                is_armed = False
+                try:
+                    async for armed in UAVs[uav_index]["system"].telemetry.armed():
+                        is_armed = armed
+                        break
+                except Exception:
+                    pass
+                if not is_armed:
+                    break
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            self.update_terminal(f"[SIM] Lỗi trong chuyến bay: {e}", 0)
+            raise e
+        
+    # async def _run_sim_uav_mission(self, uav_index, plan_file):
+    #     """
+    #     Tiến trình ngầm thực thi mission cho UAV trên tab Simulation.
+    #     Gồm các bước: Upload -> Arm -> Takeoff -> Start Mission.
+    #     """
+    #     try:
+    #         UAVs[uav_index]["status"]["on_mission"] = True
+    #         if self.active_tab_index == uav_index:
+    #             self._set_pause_button_style("Pause")
+                
+    #         # Chạy hàm mission chuẩn (đã bao gồm cất cánh và làm nhiệm vụ)
+    #         await uav_fn_do_mission(drone=UAVs[uav_index], mission_plan_file=plan_file)
+            
+    #         # Kiểm tra nếu hoàn thành thì RTL (Quay về)
+    #         if await UAVs[uav_index]["system"].mission.is_mission_finished():
+    #             self.update_terminal(f"[SIM] UAV {uav_index} finished mission. Returning to launch.", 0)
+    #             await UAVs[uav_index]["system"].action.return_to_launch()
+                
+    #         UAVs[uav_index]["status"]["on_mission"] = False
+    #         if self.active_tab_index == uav_index:
+    #             self._set_pause_button_style("Resume")
+    #     except Exception as e:
+    #         logger.error(f"[SIM] Error executing flight simulation: {e}")
+    #         self.update_terminal(f"[SIM] Error executing flight simulation: {e}", 0)
+
     # ------------------------------------< Rescue UAV 6 >-----------------------------
     # ? developing ...
     async def uav_fn_rescue(self) -> None:

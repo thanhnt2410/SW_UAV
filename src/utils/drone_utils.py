@@ -715,6 +715,7 @@ async def uav_fn_upload_mission(drone, mission_plan_file, verbose=False) -> None
 
     except Exception as e:
         print(f"Error uploading mission: {repr(e)}")
+        raise e
 
 async def uav_fn_do_mission(drone, mission_plan_file) -> None:
     """
@@ -724,6 +725,8 @@ async def uav_fn_do_mission(drone, mission_plan_file) -> None:
         drone (dict): UAV system dictionary
         mission_plan_file (str): Path to mission file with coordinates
     """
+    print_mission_progress_task = None
+    termination_task = None
     try:
         # Health check before mission
         # print(f"UAV-{drone['ID']} checking health before mission")
@@ -742,9 +745,8 @@ async def uav_fn_do_mission(drone, mission_plan_file) -> None:
         await asyncio.sleep(1)
         
         # Connect to the UAV
-        # print(f"UAV-{drone['ID']} connecting before mission")
-        await drone["system"].connect(drone["system_address"])
-        await asyncio.sleep(1)
+        # Bỏ connect lại vì UAV đã connect từ lúc ấn nút trên giao diện rồi, gọi lại dễ gây crash
+        # await drone["system"].connect(drone["system_address"])
         
         # Arm and take off
         # print(f"UAV-{drone['ID']} arming")
@@ -770,10 +772,11 @@ async def uav_fn_do_mission(drone, mission_plan_file) -> None:
         # Try to cancel any running tasks
         try:
             for task in [print_mission_progress_task, termination_task]:
-                if task and not task.done():
+                if task is not None and not task.done():
                     task.cancel()
         except:
             pass
+        raise e  # Ném lỗi ra để giao diện UI nhận được và hiển thị Popup
 
 
 async def _check_uav_health(drone):
