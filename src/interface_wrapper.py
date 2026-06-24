@@ -2464,7 +2464,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                                 label.setText(f"{current}/{total}")
                 except Exception:
                     pass
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1) # Tránh dùng float vì gây lỗi startTimer trong asyncqt
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -2518,12 +2518,6 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         for row in range(self.ui.tableWidgetAlgorithmComparison.rowCount()):
             for col in range(1, self.ui.tableWidgetAlgorithmComparison.columnCount()):
                 self.ui.tableWidgetAlgorithmComparison.setItem(row, col, QtWidgets.QTableWidgetItem(""))
-                
-        self.ui.tableWidgetAlgorithmComparison.setHorizontalHeaderLabels(
-            ["Algorithm", "Avg Cost", "Coverage", "Energy", "Time", "Path", "Overlap", "Turns", "Score"]
-        )
-
-        # 2. Get parameters from UI
         map_type = self.ui.comboBox_3.currentText()
         num_runs = self.ui.Num_run_2.value()
         if num_runs <= 0: num_runs = 1
@@ -2545,6 +2539,9 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         if self.ui.ABC_2.isChecked(): selected_algos.append("ABC")
         if self.ui.Improve_A_2.isChecked(): selected_algos.append("A*_Improved")
 
+        # Lấy trạng thái của checkbox reduce_points
+        reduce_points_enabled = self.ui.Reduce_Points.isChecked()
+
         if not selected_algos:
             self.popup_msg("Please select at least one algorithm.", "Simulation", "Warning")
             return
@@ -2556,12 +2553,15 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         self.ui.label_32.setText(f"0/{total_runs}")
         await asyncio.sleep(0) # Ép giao diện render ngay lập tức trạng thái 0/x trước khi thuật toán chạy
 
+        poly_area_m2 = 1.0  # Default fallback
+        xy_polygon_for_calc = [] # Khởi tạo biến ở đây
+        # Lấy vị trí UAV 1 làm trung tâm và điểm xuất phát
+        center_lat = UAVs[1]["init_params"]["latitude"]
+        center_lon = UAVs[1]["init_params"]["longitude"]
+        start_coord = (center_lat, center_lon)
+
         # 3. Generate mission area (polygon)
         try:
-            # Lấy vị trí UAV 1 làm trung tâm
-            center_lat = UAVs[1]["init_params"]["latitude"]
-            center_lon = UAVs[1]["init_params"]["longitude"]
-            
             # Focus bản đồ mô phỏng vào khu vực này
             self.sim_map.centerAt(center_lat, center_lon)
             self.sim_map.setZoom(18)
@@ -2575,18 +2575,28 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 p2 = calculate_new_lat_lon(center_lat, center_lon, half_side, half_side)   # Top-right
                 p3 = calculate_new_lat_lon(center_lat, center_lon, -half_side, half_side)  # Bottom-right
                 p4 = calculate_new_lat_lon(center_lat, center_lon, -half_side, -half_side) # Bottom-left
-                polygon_vertices = [p1, p2, p3, p4, p1]
+                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                # Tạo hình vuông XY gốc để tính toán chính xác
+                xy_polygon_for_calc = [
+                    (-half_side, half_side), (half_side, half_side),
+                    (half_side, -half_side), (-half_side, -half_side)
+                ]
             elif map_type == "Rectangle":
                 width = self.ui.spinBox_6.value()
                 height = self.ui.spinBox_7.value()
                 if width <= 0: width = 100.0
                 if height <= 0: height = 100.0
                 half_w, half_h = width / 2.0, height / 2.0
-                p1 = calculate_new_lat_lon(center_lat, center_lon, half_h, -half_w)
-                p2 = calculate_new_lat_lon(center_lat, center_lon, half_h, half_w)
-                p3 = calculate_new_lat_lon(center_lat, center_lon, -half_h, half_w)
-                p4 = calculate_new_lat_lon(center_lat, center_lon, -half_h, -half_w)
-                polygon_vertices = [p1, p2, p3, p4, p1]
+                p1 = calculate_new_lat_lon(center_lat, center_lon, half_h, -half_w) # Top-left
+                p2 = calculate_new_lat_lon(center_lat, center_lon, half_h, half_w)  # Top-right
+                p3 = calculate_new_lat_lon(center_lat, center_lon, -half_h, half_w) # Bottom-right
+                p4 = calculate_new_lat_lon(center_lat, center_lon, -half_h, -half_w)# Bottom-left
+                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                # Tạo hình chữ nhật XY gốc để tính toán chính xác
+                xy_polygon_for_calc = [
+                    (-half_w, half_h), (half_w, half_h),
+                    (half_w, -half_h), (-half_w, -half_h)
+                ]
             else:
                 self.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
                 return
@@ -2615,7 +2625,8 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 'title': ' '  # Truyền khoảng trắng để ép bản đồ ẩn tên điểm (tooltip) đi
             }
             for i, p in enumerate(grid_points_latlon):
-                self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
+                        self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
+            
 
         except Exception as e:
             self.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
@@ -2655,19 +2666,19 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         
         # Lấy cao độ mặc định và tọa độ ban đầu của UAV 1
         uav_alt = UAVs[1]["init_params"].get("altitude", 10.0)
-        start_coord = (center_lat, center_lon)
 
         for algo_name in selected_algos:
             if algo_name not in algo_map:
                 continue
             
-            total_cost, total_dist, total_turns = 0, 0, 0
+            # Thêm total_overlap_ratio để tính toán giá trị mới
+            total_cost, total_dist, total_turns, total_swept, total_coverage, total_overlap_ratio = 0, 0, 0, 0, 0, 0
             total_flight_time = 0
             total_battery_drop = 0
             current_best_path_for_algo = []
 
             try:
-                for run_idx in range(num_runs):
+                for run_idx in range(num_runs): # type: ignore
                     self.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
                     await asyncio.sleep(0)
                     
@@ -2675,15 +2686,46 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     path = algo_map[algo_name](grid_points_latlon.copy(), start_coord)
                     if path and (abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7):
                         path.insert(0, start_coord)
-                        
-                    cost, dist, turns = calculate_cost_for_path(path)
+
+                    cost, dist, turns, swept_area, _, coverage, _, _, overlap_ratio = calculate_cost_for_path( # type: ignore
+                        path, 
+                        xy_polygon=xy_polygon_for_calc, # Truyền trực tiếp đa giác XY
+                        cam_radius=10.0
+                    )
+                    
+                    # Cộng dồn các giá trị để tính trung bình
                     total_cost += cost
                     total_dist += dist
                     total_turns += turns
+                    total_swept += swept_area
+                    total_coverage += coverage
+                    total_overlap_ratio += overlap_ratio
                     current_best_path_for_algo = path
                     
                     # Vẽ tạm đường đi dự kiến lên bản đồ màu cam nhạt
                     self.sim_map.drawPolyLine("current_run_path", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.5})
+
+                    # # LOGIC MỚI: Nếu reduce points được chọn, xử lý trước tập điểm bay
+                    # if reduce_points_enabled:
+                    #     self.update_terminal("[SIM] Reduce Points is enabled. Pre-processing grid points...", 0)
+                    #     # a. Tạo một đường đi mặc định (zigzag) qua các điểm grid
+                    #     default_path, _ = find_zigzag_path(grid_points_latlon.copy(), start_coord)
+                        
+                    #     # b. Rút gọn đường đi này
+                    #     original_point_count = len(default_path)
+                    #     reduced_path_points = reduce_path_collinear(default_path)
+                    #     reduced_point_count = len(reduced_path_points)
+                    #     self.update_terminal(f"[SIM] Grid points reduced from {original_point_count} to {reduced_point_count} waypoints.", 0)
+
+                    #     # c. Các điểm đã rút gọn trở thành tập điểm bay mới cho tất cả thuật toán
+                    #     grid_points_latlon = reduced_path_points
+
+                    # # Xóa các marker cũ trên bản đồ mô phỏng trước khi vẽ các điểm mới
+                    # self.sim_map.runScript("if (typeof map !== 'undefined') { map.eachLayer(function (l) { if (l instanceof L.Marker) { map.removeLayer(l); } }); }")
+                    # await asyncio.sleep(0) # Đợi một chút để map kịp xóa (dùng số 0 thay cho 0.1 để tránh lỗi float của PyQt)
+
+                    # for i, p in enumerate(grid_points_latlon):
+                    #     self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
                     
                     # 2. XUẤT TỌA ĐỘ RA FILE
                     sim_plan_file = os.path.join(__current_path__, "logs", "points", "simulation_path.txt")
@@ -2707,7 +2749,10 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     end_battery = float(batt_str.replace('%', '')) if '%' in batt_str else start_battery
                     
                     flight_time = end_time - start_time
-                    battery_drop = max(0, start_battery - end_battery)
+                    
+                    # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
+                    # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
+                    battery_drop = (flight_time * 0.15) + (turns * 0.05)
                     
                     total_flight_time += flight_time
                     total_battery_drop += battery_drop
@@ -2731,18 +2776,24 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     avg_turns = total_turns / num_runs
                     avg_time = total_flight_time / num_runs
                     avg_battery = total_battery_drop / num_runs
+                    avg_swept = total_swept / num_runs
+                    avg_coverage = total_coverage / num_runs
+                    avg_overlap = total_overlap_ratio / num_runs
 
                     row = algo_to_row.get(algo_name)
                     if row is not None:
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{avg_cost:.2f}"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{avg_battery:.2f}%"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{avg_time:.1f} s"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{avg_dist:.2f} m"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 7, QtWidgets.QTableWidgetItem(f"{avg_turns:.1f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{avg_coverage:.3f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{avg_swept:.2f} m²"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{avg_battery:.2f}%"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{avg_time:.1f} s"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 6, QtWidgets.QTableWidgetItem(f"{avg_dist:.2f} m"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 7, QtWidgets.QTableWidgetItem(f"{avg_overlap:.3f}"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 8, QtWidgets.QTableWidgetItem(f"{avg_turns:.1f}"))
                         
-                        # Tính điểm tổng hợp (Score): thời gian và pin tiêu thụ càng thấp càng tốt
-                        score = avg_time + (avg_battery * 10)
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 8, QtWidgets.QTableWidgetItem(f"{score:.1f}"))
+                        # Tính điểm tổng hợp (Score): Kết hợp Cost thuật toán và Mức tiêu thụ mô phỏng thực tế
+                        score = avg_cost + (avg_time * 0.1) + (avg_battery * 10)
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 9, QtWidgets.QTableWidgetItem(f"{score:.1f}"))
                         
                         # Cập nhật xem thuật toán nào đang vô địch về Score
                         if score < best_overall_score:

@@ -378,54 +378,22 @@ background-color: rgb(252, 175, 62);</string>
                   <property name="title">
                    <string>Map Configuration</string>
                   </property>
-                  <layout class="QVBoxLayout" name="verticalLayout_25">
-                   <item>
+                  <layout class="QGridLayout" name="gridLayout_2">
+                   <item row="8" column="0">
+                    <widget class="QPushButton" name="pushButton">
+                     <property name="text">
+                      <string>Run Simulation</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item row="0" column="0">
                     <widget class="QLabel" name="label_25">
                      <property name="text">
                       <string>Map Type</string>
                      </property>
                     </widget>
                    </item>
-                   <item>
-                    <widget class="QComboBox" name="comboBox_3">
-                     <item>
-                      <property name="text">
-                       <string>Square</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Rectangle</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Circle</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Pentagon</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Hexagon</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Rescue</string>
-                      </property>
-                     </item>
-                     <item>
-                      <property name="text">
-                       <string>Custom</string>
-                      </property>
-                     </item>
-                    </widget>
-                   </item>
-                   <item>
+                   <item row="2" column="0">
                     <widget class="QGroupBox" name="groupBox_3">
                      <property name="title">
                       <string>Map Parameters</string>
@@ -522,10 +490,56 @@ background-color: rgb(252, 175, 62);</string>
                      </layout>
                     </widget>
                    </item>
-                   <item>
-                    <widget class="QPushButton" name="pushButton">
+                   <item row="1" column="0">
+                    <widget class="QComboBox" name="comboBox_3">
+                     <item>
+                      <property name="text">
+                       <string>Square</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Rectangle</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Circle</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Pentagon</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Hexagon</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Rescue</string>
+                      </property>
+                     </item>
+                     <item>
+                      <property name="text">
+                       <string>Custom</string>
+                      </property>
+                     </item>
+                    </widget>
+                   </item>
+                   <item row="5" column="0">
+                    <widget class="QCheckBox" name="Reduce_Points">
                      <property name="text">
-                      <string>Run Simulation</string>
+                      <string>Reduce Points</string>
+                     </property>
+                    </widget>
+                   </item>
+                   <item row="6" column="0">
+                    <widget class="QCheckBox" name="All_UAVs">
+                     <property name="text">
+                      <string>All UAVs</string>
                      </property>
                     </widget>
                    </item>
@@ -736,10 +750,10 @@ background-color: rgb(252, 175, 62);</string>
                     <string notr="true"/>
                    </property>
                    <property name="rowCount">
-                    <number>8</number>
+                    <number>9</number>
                    </property>
                    <property name="columnCount">
-                    <number>9</number>
+                    <number>10</number>
                    </property>
                    <attribute name="horizontalHeaderCascadingSectionResizes">
                     <bool>false</bool>
@@ -793,6 +807,11 @@ background-color: rgb(252, 175, 62);</string>
                      <string>New Row</string>
                     </property>
                    </row>
+                   <row>
+                    <property name="text">
+                     <string>New Row</string>
+                    </property>
+                   </row>
                    <column>
                     <property name="text">
                      <string>Algorithm</string>
@@ -806,6 +825,11 @@ background-color: rgb(252, 175, 62);</string>
                    <column>
                     <property name="text">
                      <string>Coverage</string>
+                    </property>
+                   </column>
+                   <column>
+                    <property name="text">
+                     <string>Swept Area</string>
                     </property>
                    </column>
                    <column>
@@ -874,6 +898,11 @@ background-color: rgb(252, 175, 62);</string>
                     </property>
                    </item>
                    <item row="7" column="0">
+                    <property name="text">
+                     <string>ABC</string>
+                    </property>
+                   </item>
+                   <item row="8" column="0">
                     <property name="text">
                      <string>Improved A*</string>
                     </property>
