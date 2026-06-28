@@ -75,11 +75,16 @@ def trace(function, *args, **k):
 
 class _LoggedPage(QWebEnginePage):
     """Custom WebEnginePage that logs JavaScript console messages."""
-    
-    @trace
-    def javaScriptConsoleMessage(self, msg: str, line: int, source: str) -> None:
+
+    def javaScriptConsoleMessage(
+        self,
+        level: "QWebEnginePage.JavaScriptConsoleMessageLevel",
+        message: str,
+        lineNumber: int,
+        sourceID: str,
+    ):
         """Log JavaScript console messages with source and line information."""
-        print(f"JS: {source} line {line}: {msg}")
+        print(f"JS: {sourceID} line {lineNumber}: {message}")
 
 
 class _MapBridge(QtCore.QObject):
@@ -309,12 +314,15 @@ class MapEngine(QWebEngineView):
         self.map_name = name
         self.map_widget = widget or self
 
+        # Use a custom page to capture and log JavaScript console messages
+        self.map_page = _LoggedPage(self)
+        self.map_widget.setPage(self.map_page)
+
         # 1. Cấp quyền cho file local được tải Leaflet (JS/CSS) từ internet
         self.map_widget.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
         self.map_widget.settings().setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
 
         # Setup web channel for JS-Python communication before loading the page.
-        self.map_page = self.map_widget.page()
         self.web_channel = QWebChannel(self.map_page)
         self.web_bridge = _MapBridge(self)
         self.map_page.setWebChannel(self.web_channel)

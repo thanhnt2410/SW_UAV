@@ -1,10 +1,10 @@
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+import sys
+from PyQt5.QtWidgets import QApplication, QMainWindow
 
-app = QApplication([])
+app = QApplication(sys.argv)
 
-view = QWebEngineView()
-view.setHtml("<h1>Hello</h1>")
-view.show()
+w = QMainWindow()
+w.resize(800, 600)
+w.show()
 
-app.exec()
+sys.exit(app.exec_())

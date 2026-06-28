@@ -2486,7 +2486,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
             self.ui.stackedMapParam_2.setCurrentIndex(1)
         elif index == 2:  # Circle
             self.ui.stackedMapParam_2.setCurrentIndex(2)
-        elif index == 5:  # Rescue
+        elif index in [5, 6]:  # Rescue, Custom
             self.ui.stackedMapParam_2.setCurrentIndex(3)
 
     # ------------------------------------< Simulation Functions >-----------------------------
@@ -2557,7 +2557,6 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         self.ui.label_32.setText(f"0/{total_runs}")
         await asyncio.sleep(0) # Ép giao diện render ngay lập tức trạng thái 0/x trước khi thuật toán chạy
 
-        poly_area_m2 = 1.0  # Default fallback
         xy_polygon_for_calc = [] # Khởi tạo biến ở đây
         # Lấy vị trí UAV 1 làm trung tâm và điểm xuất phát
         center_lat = UAVs[1]["init_params"]["latitude"]
@@ -2567,7 +2566,6 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
         # 3. Generate mission area (polygon)
         try:
             # Focus bản đồ mô phỏng vào khu vực này
-            self.sim_map.centerAt(center_lat, center_lon)
             self.sim_map.setZoom(18)
 
             if map_type == "Square":
@@ -2579,7 +2577,7 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 p2 = calculate_new_lat_lon(center_lat, center_lon, half_side, half_side)   # Top-right
                 p3 = calculate_new_lat_lon(center_lat, center_lon, -half_side, half_side)  # Bottom-right
                 p4 = calculate_new_lat_lon(center_lat, center_lon, -half_side, -half_side) # Bottom-left
-                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                polygon_vertices = [p1, p2, p3, p4, p1] # Dùng để vẽ trên bản đồ
                 # Tạo hình vuông XY gốc để tính toán chính xác
                 xy_polygon_for_calc = [
                     (-half_side, half_side), (half_side, half_side),
@@ -2595,43 +2593,79 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 p2 = calculate_new_lat_lon(center_lat, center_lon, half_h, half_w)  # Top-right
                 p3 = calculate_new_lat_lon(center_lat, center_lon, -half_h, half_w) # Bottom-right
                 p4 = calculate_new_lat_lon(center_lat, center_lon, -half_h, -half_w)# Bottom-left
-                polygon_vertices = [p1, p2, p3, p4] # Dùng để vẽ trên bản đồ
+                polygon_vertices = [p1, p2, p3, p4, p1] # Dùng để vẽ trên bản đồ
                 # Tạo hình chữ nhật XY gốc để tính toán chính xác
                 xy_polygon_for_calc = [
                     (-half_w, half_h), (half_w, half_h),
                     (half_w, -half_h), (-half_w, -half_h)
                 ]
+            elif map_type == "Custom":
+                custom_polygons = self.geodata.get("Polygon", [])
+                if not custom_polygons:
+                    self.popup_msg(
+                        "Vui lòng vẽ một vùng Custom trên Rescue Map trước khi chạy Simulation.",
+                        "Simulation",
+                        "Warning",
+                    )
+                    self.update_terminal("[SIM] Simulation aborted: No custom polygon selected.", 0)
+                    return
+
+                polygon_vertices = [
+                    (float(lat), float(lon))
+                    for lat, lon in custom_polygons[-1]
+                ]
+                if len(polygon_vertices) < 3:
+                    self.popup_msg("Vùng Custom cần ít nhất 3 điểm.", "Simulation", "Warning")
+                    self.update_terminal("[SIM] Simulation aborted: Invalid custom polygon.", 0)
+                    return
+
+                polygon_points_for_center = (
+                    polygon_vertices[:-1]
+                    if polygon_vertices[0] == polygon_vertices[-1]
+                    else polygon_vertices
+                )
+                center_lat = sum(point[0] for point in polygon_points_for_center) / len(polygon_points_for_center)
+                center_lon = sum(point[1] for point in polygon_points_for_center) / len(polygon_points_for_center)
+                start_coord = (center_lat, center_lon)
+
+                if polygon_vertices[0] != polygon_vertices[-1]:
+                    polygon_vertices.append(polygon_vertices[0])
+
+                xy_polygon_for_calc = convert_to_cartesian(polygon_vertices)
             else:
                 self.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
                 return
 
+            self.sim_map.centerAt(center_lat, center_lon)
+
             # Vẽ vùng bay lên bản đồ sim
             self.sim_map.drawPolygon("sim_area", polygon_vertices, options={'color': 'blue', 'fillOpacity': 0.1})
 
+            # VẼ LẠI DRONE LÊN BẢN ĐỒ SIMULATION SAU KHI BỊ XÓA
+            self.update_drone_positions()
+
             # 4. Generate grid points
-            cartesian_poly = convert_to_cartesian(polygon_vertices)
+            # Use the center of the area as the reference for coordinate conversions
+            # to ensure consistency and avoid drift.
+            ref_lat, ref_lon = start_coord
+
+            # Convert polygon vertices from Lat/Lon to a local XY cartesian plane centered at the reference point.
+            # We use latlon_to_xy for a more consistent conversion relative to a center,
+            # instead of convert_to_cartesian which uses a corner of the polygon bounding box.
+            cartesian_poly = [latlon_to_xy(ref_lat, ref_lon, lat, lon) for lat, lon in polygon_vertices]
+
+            # Generate a grid of points within the cartesian polygon.
             grid_points_cartesian = generate_grid(cartesian_poly, grid_size)
             
-            # Chuyển đổi điểm grid về lại Lat/Lon
-            ref_lat = min(p[0] for p in polygon_vertices)
-            ref_lon = min(p[1] for p in polygon_vertices)
-            grid_points_latlon = [convert_to_lat_lon((ref_lat, ref_lon), p) for p in grid_points_cartesian]
+            # Convert the cartesian grid points back to Lat/Lon using the same reference point.
+            # calculate_new_lat_lon is more accurate than the previous convert_to_lat_lon.
+            grid_points_latlon = [calculate_new_lat_lon(ref_lat, ref_lon, p[1], p[0]) for p in grid_points_cartesian]
             
             if not grid_points_latlon or len(grid_points_latlon) < 2:
                 self.popup_msg("Vùng sinh quá bé hoặc Grid Size quá lớn, không đủ tạo điểm bay!", "Simulation", "Warning")
                 self.update_terminal("[SIM] Simulation aborted: Not enough points.", 0)
                 return
-
-            # Vẽ các điểm grid lên bản đồ sim
-            marker_options = {
-                'icon': str(DOT_ICON_PATH), 
-                'iconSize': {'width': 5, 'height': 5},
-                'title': ' '  # Truyền khoảng trắng để ép bản đồ ẩn tên điểm (tooltip) đi
-            }
-            for i, p in enumerate(grid_points_latlon):
-                        self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
-            
-
+        
         except Exception as e:
             self.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
             logger.error(f"[SIM] Error generating map/grid: {e}")
@@ -2691,6 +2725,13 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     if path and (abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7):
                         path.insert(0, start_coord)
 
+                    # NEW: Reduce path if enabled, after path generation
+                    if reduce_points_enabled:
+                        original_point_count = len(path)
+                        path = reduce_path_collinear(path)
+                        reduced_point_count = len(path)
+                        self.update_terminal(f"[SIM] Reduced path for {algo_name} from {original_point_count} to {reduced_point_count} waypoints.", 0)
+
                     cost, dist, turns, swept_area, _, coverage, _, _, overlap_ratio = calculate_cost_for_path( # type: ignore
                         path, 
                         xy_polygon=xy_polygon_for_calc, # Truyền trực tiếp đa giác XY
@@ -2706,69 +2747,72 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     total_overlap_ratio += overlap_ratio
                     current_best_path_for_algo = path
                     
-                    # Vẽ tạm đường đi dự kiến lên bản đồ màu cam nhạt
-                    self.sim_map.drawPolyLine("current_run_path", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.5})
+                    # --- DRAWING CURRENT PATH (MARKERS & POLYLINE) BEFORE SIM ---
+                    # Clear previous temporary path drawings (orange polyline)
+                    self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
+                    # Clear any existing temporary markers (e.g., from a previous run)
+                    self.sim_map.runScript("""
+                        if (typeof map !== 'undefined') {
+                            map.eachLayer(function (layer) {
+                                if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
+                                    map.removeLayer(layer);
+                                }
+                            });
+                        }
+                    """)
+                    # Draw current path markers
+                    for i, p in enumerate(path):
+                        marker_options = {
+                            'icon': str(DOT_ICON_PATH),
+                            'iconSize': {'width': 5, 'height': 5},
+                            'title': f'Point {i}',
+                            'name': 'sim_current_pt_' # Add a custom name for easier clearing
+                        }
+                        self.sim_map.addMarker(f"sim_current_pt_{i}", p[0], p[1], **marker_options)
 
-                    # # LOGIC MỚI: Nếu reduce points được chọn, xử lý trước tập điểm bay
-                    # if reduce_points_enabled:
-                    #     self.update_terminal("[SIM] Reduce Points is enabled. Pre-processing grid points...", 0)
-                    #     # a. Tạo một đường đi mặc định (zigzag) qua các điểm grid
-                    #     default_path, _ = find_zigzag_path(grid_points_latlon.copy(), start_coord)
-                        
-                    #     # b. Rút gọn đường đi này
-                    #     original_point_count = len(default_path)
-                    #     reduced_path_points = reduce_path_collinear(default_path)
-                    #     reduced_point_count = len(reduced_path_points)
-                    #     self.update_terminal(f"[SIM] Grid points reduced from {original_point_count} to {reduced_point_count} waypoints.", 0)
-
-                    #     # c. Các điểm đã rút gọn trở thành tập điểm bay mới cho tất cả thuật toán
-                    #     grid_points_latlon = reduced_path_points
-
-                    # # Xóa các marker cũ trên bản đồ mô phỏng trước khi vẽ các điểm mới
-                    # self.sim_map.runScript("if (typeof map !== 'undefined') { map.eachLayer(function (l) { if (l instanceof L.Marker) { map.removeLayer(l); } }); }")
-                    # await asyncio.sleep(0) # Đợi một chút để map kịp xóa (dùng số 0 thay cho 0.1 để tránh lỗi float của PyQt)
-
-                    # for i, p in enumerate(grid_points_latlon):
-                    #     self.sim_map.addMarker(f"sim_pt_{i}", p[0], p[1], **marker_options)
-                    
+                    # Draw current path polyline (blue to distinguish from orange temp line)
+                    self.sim_map.drawPolyLine("current_run_path_polyline", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.7})
                     # 2. XUẤT TỌA ĐỘ RA FILE
                     sim_plan_file = os.path.join(__current_path__, "logs", "points", "simulation_path.txt")
                     os.makedirs(os.path.dirname(sim_plan_file), exist_ok=True)
                     with open(sim_plan_file, "w") as f:
                         for pt in path:
                             f.write(f"{pt[0]},{pt[1]},{uav_alt}\n")
-                            
+
                     # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
                     # Ghi nhận thời gian và pin trước khi cất cánh
                     start_time = time.time()
                     batt_str = UAVs[1]["status"].get("battery_status", "100%")
                     start_battery = float(batt_str.replace('%', '')) if '%' in batt_str else 100.0
-                    
                     # Kích hoạt chuyến bay khép kín (đợi cho tới khi nó hạ cánh hẳn mới đi tiếp)
                     await self._run_single_sim_flight(1, sim_plan_file)
-                    
+                    # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
+                    self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
+                    self.sim_map.runScript("""
+                        if (typeof map !== 'undefined') {
+                            map.eachLayer(function (layer) {
+                                if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
+                                    map.removeLayer(layer);
+                                }
+                            });
+                        }
+                    """)
                     # Ghi nhận thời gian và pin sau khi hạ cánh
                     end_time = time.time()
                     batt_str = UAVs[1]["status"].get("battery_status", "100%")
                     end_battery = float(batt_str.replace('%', '')) if '%' in batt_str else start_battery
-                    
                     flight_time = end_time - start_time
-                    
                     # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
                     # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
                     battery_drop = (flight_time * 0.15) + (turns * 0.05)
-                    
                     total_flight_time += flight_time
                     total_battery_drop += battery_drop
                     self.update_terminal(f"[SIM] Kết quả lượt {run_idx+1}: Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%", 0)
-                    
                     # 4. CẬP NHẬT GIAO DIỆN
-                        
                     current_run += 1
                     self.ui.progressBar.setValue(current_run)
                     self.ui.label_32.setText(f"{current_run}/{total_runs}")
                     await asyncio.sleep(0)
-                    
                     if current_run < total_runs:
                         self.update_terminal("[SIM] Đợi 5 giây làm nguội trước khi cất cánh lượt tiếp theo...", 0)
                         await asyncio.sleep(5)
@@ -2810,11 +2854,33 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                 continue
 
         # 6. HOÀN TẤT & VẼ KẾT QUẢ TỐT NHẤT LÊN BẢN ĐỒ
-        # Xoá đường màu cam nhạt để vẽ đường chính thức
+        # Xoá đường màu cam nhạt để vẽ đường chính thức (đường tạm thời trước đây)
         self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
         
+        # Clear all temporary markers and polylines that might still be present
+        self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
+        self.sim_map.runScript("""
+            if (typeof map !== 'undefined') {
+                map.eachLayer(function (layer) {
+                    if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
+                        map.removeLayer(layer);
+                    }
+                });
+            }
+        """)
+
         if best_overall_path:
-            self.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5})
+            # Redraw markers for the final, best path
+            for i, p in enumerate(best_overall_path):
+                marker_options = {
+                    'icon': str(DOT_ICON_PATH),
+                    'iconSize': {'width': 5, 'height': 5},
+                    'title': f'Point {i}',
+                    'name': 'sim_best_pt_' # Add a unique name for final best path markers
+                }
+                self.sim_map.addMarker(f"sim_best_pt_{i}", p[0], p[1], **marker_options)
+
+            self.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5, 'name': 'best_path_polyline'})
             self.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
             self.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
             self.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")

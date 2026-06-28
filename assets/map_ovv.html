@@ -39,7 +39,11 @@
     <!-- import js script -->
     <script type="text/javascript" src="./qwebchannel.js"></script>
 
-    <script type="text/javascript" src="./map.js"></script>
+    <script>
+        var script = document.createElement('script');
+        script.src = './map.js?v=' + new Date().getTime();
+        document.head.appendChild(script);
+    </script>
 </head>
 
 <body onload="initialize()">

@@ -134,6 +134,7 @@ class Map(Interface):
                 url=map_ovv_html_path,
             )
             self.sim_map.mapMovedCallback = self.onMapSimMoved
+            self.sim_map.mapGeojsonCallback = self.onMapGeojson
             self.sim_map.waitUntilReady()
 
             # Set initial values in UI
@@ -224,6 +225,18 @@ class Map(Interface):
                 self.remove_objects(["paths"])
                 self.drone_paths_dict = {}
                 self.drone_path_enabled = False
+                # Redraw drones from memory to ensure they are visible
+                for key, (lat, lon) in self.drone_initial_positions.items():
+                    drone_id = key.split('_')[-1]
+                    marker_options = {
+                        "icon": DRONE_ICON_PATH,
+                        "draggable": False,
+                        "title": f"UAV {drone_id}",
+                        "iconSize": {"width": 21, "height": 21},
+                    }
+                    self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                    self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                    self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
                 return
                 
             # Otherwise, create and display paths
@@ -273,6 +286,19 @@ class Map(Interface):
                         path_key, [start, end], options=dict(color=color, weight=5)
                     )
                     self.drone_paths_dict[path_key] = (start, end)
+            
+            # Redraw drones from memory to ensure they are visible
+            for key, (lat, lon) in self.drone_initial_positions.items():
+                drone_id = key.split('_')[-1]
+                marker_options = {
+                    "icon": DRONE_ICON_PATH,
+                    "draggable": False,
+                    "title": f"UAV {drone_id}",
+                    "iconSize": {"width": 21, "height": 21},
+                }
+                self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
                     
         except Exception as e:
             logger.error(f"Failed to create routes: {e}")
@@ -291,8 +317,7 @@ class Map(Interface):
         2. Displays these points on both the main and overview maps
         3. Exports the points to files for mission planning
         """
-        if self.debug:
-            print("Button clicked: Show grid points")
+        print("[DEBUG] btn_map_show_grid_points_callback called.")
 
         try:
             grid_size = self.gridSize
@@ -310,9 +335,11 @@ class Map(Interface):
 
             # If grid points already exist and were previously reduced/refreshed, just display them
             if (self.reduced_grid_points or self.refreshed) and self.drone_markers_dict:
+                print("[DEBUG] Path taken: _redisplay_grid_points()")
                 self._redisplay_grid_points()
                 return
 
+            print("[DEBUG] Path taken: process_grid_points()")
             # Generate new grid points by splitting the area
             grid_points = split_grids(self.rotated_area_list, *self.extra, grid_size, n_areas)
 
@@ -327,6 +354,19 @@ class Map(Interface):
             self.process_grid_points(grid_points)
             self.grid_enabled = True
 
+            # Redraw drones from memory to ensure they are visible
+            for key, (lat, lon) in self.drone_initial_positions.items():
+                drone_id = key.split('_')[-1]
+                marker_options = {
+                    "icon": DRONE_ICON_PATH,
+                    "draggable": False,
+                    "title": f"UAV {drone_id}",
+                    "iconSize": {"width": 21, "height": 21},
+                }
+                self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+
         except Exception as e:
             logger.error(f"Failed to generate grid points: {e}")
             self.popup_msg(
@@ -337,6 +377,7 @@ class Map(Interface):
             
     def _redisplay_grid_points(self):
         """Redisplay existing grid points on the map"""
+        print("[DEBUG] _redisplay_grid_points called.")
         self.remove_objects(["markers"])
         
         marker_options = {
@@ -344,11 +385,29 @@ class Map(Interface):
             "iconSize": {"width": 5, "height": 5}
         }
         
+        print(f"[DEBUG] Redisplaying {len(self.drone_markers_dict)} grid point markers.")
         for key, value in self.drone_markers_dict.items():
-            self.rescue_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
-            self.ovv_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
-            self.sim_map.addMarker(key, float(value[0]), float(value[1]), **marker_options)
+            point_marker_options = marker_options.copy()
+            point_marker_options['title'] = key
+            self.rescue_map.addMarker(key, float(value[0]), float(value[1]), **point_marker_options)
+            self.ovv_map.addMarker(key, float(value[0]), float(value[1]), **point_marker_options)
+            self.sim_map.addMarker(key, float(value[0]), float(value[1]), **point_marker_options)
 
+        # Redraw drones from memory to ensure they are visible
+        print(f"[DEBUG] Redisplaying {len(self.drone_initial_positions)} drone markers.")
+        print(f"[DEBUG] Drone keys to redraw: {list(self.drone_initial_positions.keys())}")
+        for key, (lat, lon) in self.drone_initial_positions.items():
+            drone_id = key.split('_')[-1]
+            marker_options = {
+                "icon": DRONE_ICON_PATH,
+                "draggable": False,
+                "title": f"UAV {drone_id}",
+                "iconSize": {"width": 21, "height": 21},
+            }
+            self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+            self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+            self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+        print("[DEBUG] _redisplay_grid_points finished.")
             
     def process_grid_points(self, grid_points):
         """
@@ -357,6 +416,7 @@ class Map(Interface):
         Args:
             grid_points: List of grid points for each area
         """
+        print("[DEBUG] process_grid_points started")
         try:
             # Reset state flags
             self.reduced_grid_points = False
@@ -374,6 +434,10 @@ class Map(Interface):
             else:
                 # Process single area
                 self._process_single_area(grid_points, 1, marker_options)
+
+            # Redraw drones to ensure they are visible after processing points
+            print("[DEBUG] process_grid_points finished, calling update_drone_positions")
+            self.update_drone_positions()
 
         except Exception as e:
             logger.log(repr(e), level="error")
@@ -398,9 +462,11 @@ class Map(Interface):
         # Add markers for each point
         for i, point in enumerate(ordered_points):
             marker_id = f"A{area_index}P{i + 1}"
-            self.rescue_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
-            self.ovv_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
-            self.sim_map.addMarker(marker_id, float(point[0]), float(point[1]), **marker_options)
+            point_marker_options = marker_options.copy()
+            point_marker_options['title'] = marker_id
+            self.rescue_map.addMarker(marker_id, float(point[0]), float(point[1]), **point_marker_options)
+            self.ovv_map.addMarker(marker_id, float(point[0]), float(point[1]), **point_marker_options)
+            self.sim_map.addMarker(marker_id, float(point[0]), float(point[1]), **point_marker_options)
             self.drone_markers_dict[marker_id] = point
 
         # Save points to file
@@ -635,6 +701,19 @@ class Map(Interface):
             self.rotated_area_list = rotated_area_list
             self.extra = (angle, midpoint, min_lat, min_lon)
 
+            # Redraw drones from memory to ensure they are visible
+            for key, (lat, lon) in self.drone_initial_positions.items():
+                drone_id = key.split('_')[-1]
+                marker_options = {
+                    "icon": DRONE_ICON_PATH,
+                    "draggable": False,
+                    "title": f"UAV {drone_id}",
+                    "iconSize": {"width": 21, "height": 21},
+                }
+                self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+
         except Exception as e:
             logger.error(f"Failed to split area: {e}")
             self.popup_msg(
@@ -697,23 +776,28 @@ class Map(Interface):
                 # Add markers for reduced points
                 for i, point in enumerate(filtered_points):
                     marker_key = f"A{ind + 1}P{i + 1}"
+                    marker_options = dict(
+                        icon=str(DOT_ICON_PATH), 
+                        iconSize={"width": 5, "height": 5},
+                        title=marker_key
+                    )
                     self.rescue_map.addMarker(
                         marker_key,
                         float(point[0]),
                         float(point[1]),
-                        **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 5, "height": 5})
+                        **marker_options
                     )
                     self.ovv_map.addMarker(
                         marker_key,
                         float(point[0]),
                         float(point[1]),
-                        **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 5, "height": 5})
+                        **marker_options
                     )
                     self.sim_map.addMarker(
                         marker_key,
                         float(point[0]),
                         float(point[1]),
-                        **dict(icon=str(DOT_ICON_PATH), iconSize={"width": 5, "height": 5})
+                        **marker_options
                     )
                     self.drone_markers_dict[marker_key] = point
 
@@ -773,6 +857,19 @@ class Map(Interface):
 
             self.reduced_grid_points = True
             logger.info("Successfully reduced grid points and exported .plan files")
+
+            # Redraw drones from memory to ensure they are visible
+            for key, (lat, lon) in self.drone_initial_positions.items():
+                drone_id = key.split('_')[-1]
+                marker_options = {
+                    "icon": DRONE_ICON_PATH,
+                    "draggable": False,
+                    "title": f"UAV {drone_id}",
+                    "iconSize": {"width": 21, "height": 21},
+                }
+                self.rescue_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.ovv_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
+                self.sim_map.addMarker(key=key, latitude=lat, longitude=lon, **marker_options)
 
         except Exception as e:
             logger.error(f"Failed to reduce points: {e}")
@@ -935,7 +1032,7 @@ class Map(Interface):
 
             # Clear previous data of this type
             self.geodata.setdefault(type_name, []).clear()
-            self.remove_objects(["markers", "paths", "areas"])
+            self.remove_objects(["paths", "areas"])
             
             if type_name == "Point":
                 lon, lat = points
@@ -969,15 +1066,17 @@ class Map(Interface):
             
             # Reset state flags
             self.refreshed = False
-            self.reduced_grid_points = False           
+            self.reduced_grid_points = False
+
+            # Refresh drone positions to prevent them from being cleared by map drawing actions
+            self.show_drones(init=False)
 
         except Exception as e:
             logger.log(repr(e), level="error")
             
     def remove_objects(self, object_types):
         """Remove objects of specified types from both maps"""
-        if self.debug:
-            print("Removing objects:", object_types)
+        print("[DEBUG] Removing objects:", object_types)
             
         if not object_types:
             return
@@ -985,6 +1084,7 @@ class Map(Interface):
         try:
             for obj_type in object_types:
                 if obj_type == 'markers' and self.drone_markers_dict:
+                    print(f"[DEBUG] Removing marker keys: {list(self.drone_markers_dict.keys())}")
                     for key in self.drone_markers_dict:
                         self.rescue_map.deleteMarker(key)
                         self.ovv_map.deleteMarker(key)
@@ -1028,9 +1128,12 @@ class Map(Interface):
             init: If True, show drones at their initial positions from drone_init_pos
                 If False, show drones at their current positions from drone_current_pos
         """
+        print(f"[DEBUG] show_drones called with init={init}")
+        print(f"[DEBUG] self.drone_initial_positions before update: {list(self.drone_initial_positions.keys())}")
+            
         try:
             # Clear previous drone markers
-            self.remove_drone_markers()
+            # self.remove_drone_markers()
             
             # Reset position lists
             self.drone_position_list = []
@@ -1121,9 +1224,9 @@ class Map(Interface):
                 self.ovv_map.centerAt(first_pos[0], first_pos[1])
                 self.sim_map.centerAt(first_pos[0], first_pos[1])
             
-            if self.debug:
-                print(f"Loaded {loaded_drones} drone positions, using {'initial' if init else 'current'} positions")
-        
+            print(f"[DEBUG] Loaded {loaded_drones} drone positions, using {'initial' if init else 'current'} positions")
+            print(f"[DEBUG] self.drone_initial_positions after update: {list(self.drone_initial_positions.keys())}")
+
         except Exception as e:
             logger.error(f"Error showing drones: {e}")
             self.popup_msg(
@@ -1151,6 +1254,7 @@ class Map(Interface):
         self.show_drones(init=False)
 
     def show_geodata(self, geodata: dict) -> None:
+        print("[DEBUG] show_geodata called.")
         # Show the points on the rescue map
 
         for ind, (lat, lon) in enumerate(geodata["Points"]):
@@ -1216,7 +1320,9 @@ class Map(Interface):
             
             if self.debug:
                 print(f"Added polygon {ind} with points {polygon}")
-        pass
+        
+        print("[DEBUG] show_geodata finished, calling update_drone_positions.")
+        self.update_drone_positions()
 
 
 # ------------------------------------< Map Application Class >-----------------------------

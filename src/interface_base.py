@@ -85,6 +85,7 @@ class Interface(QMainWindow):
         # Set up UI
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self._enable_resizable_window()
 
         # Current view tracking
         self.active_tab_index = 0
@@ -95,6 +96,30 @@ class Interface(QMainWindow):
         
         # Set up the interface
         self._init_interface()
+
+    def _enable_resizable_window(self) -> None:
+        """Restore normal window controls after loading the generated UI."""
+        expanding_policy = QtWidgets.QSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        self.setSizePolicy(expanding_policy)
+        self.setMinimumSize(1024, 720)
+        self.setMaximumSize(QtCore.QSize(16777215, 16777215))
+
+        if hasattr(self.ui, "centralWidget"):
+            self.ui.centralWidget.setSizePolicy(expanding_policy)
+
+        if hasattr(self.ui, "stackedWidget"):
+            self.ui.stackedWidget.setSizePolicy(expanding_policy)
+            self.ui.stackedWidget.setMaximumSize(QtCore.QSize(16777215, 16777215))
+
+        self.setWindowFlags(
+            self.windowFlags()
+            | QtCore.Qt.WindowMinimizeButtonHint
+            | QtCore.Qt.WindowMaximizeButtonHint
+            | QtCore.Qt.WindowCloseButtonHint
+        )
 
     def _initialize_ui_component_lists(self) -> None:
         """

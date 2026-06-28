@@ -192,21 +192,35 @@ function setZoomJs(zoom) {
 }
 // ================== Marker ==================
 function addMarkerJs(key, latitude, longitude, parameters) {
-    if (key in markers) {
+    // console.log("addMarkerJs called with key: " + key);
+    // console.log("Received parameters: " + JSON.stringify(parameters));
+
+    if (markers[key]) {
         deleteMarkerJs(key);
     }
 
-    if ("icon" in parameters) {
-        parameters["icon"] = new L.Icon({
-        iconUrl: parameters["icon"],
-        // iconAnchor: new L.Point(parameters["iconAnchor"].x, parameters["iconAnchor"].y),
-        iconSize: new L.Point(parameters["iconSize"].width, parameters["iconSize"].height),
+    parameters = parameters || {};
+
+    if (parameters.icon) {
+        parameters.icon = new L.Icon({
+            iconUrl: parameters.icon,
+            iconSize: new L.Point(parameters.iconSize.width, parameters.iconSize.height),
         });
     }
 
     var marker = L.marker([latitude, longitude], parameters).addTo(map);
-    // var popup = L.popup({autoClose: false}).setLatLng([latitude, longitude]).setContent(key).addTo(map);
-    var tooltip = L.tooltip({ direction: 'top'}).setContent(key).setLatLng([latitude, longitude]).addTo(map);
+
+    if (parameters.title) {
+        // console.log("Binding tooltip with title: " + parameters.title);
+        marker.bindTooltip(String(parameters.title), {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -15],
+            className: 'uav-tooltip'
+        }).openTooltip();
+    } else {
+        // console.log("No title found in parameters for key: " + key);
+    }
 
     marker.on("dragend", function (event) {
         var marker = event.target;
@@ -215,7 +229,6 @@ function addMarkerJs(key, latitude, longitude, parameters) {
 
     marker.on("click", function (event) {
         var marker = event.target;
-        //marker.bindPopup(parameters["title"]);
         qtWidget.markerClicked(key, marker.getLatLng().lat, marker.getLatLng().lng);
     });
 
