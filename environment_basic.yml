@@ -49,3 +49,4 @@ dependencies:
       - tqdm==4.67.3
       - colorlog==6.10.1
       - pyfiglet==1.0.4
+      - pyproj==3.7.1

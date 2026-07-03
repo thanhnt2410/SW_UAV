@@ -1394,19 +1394,17 @@ def reduce_path_collinear(path):
     
     return reduced_path
 # Tinh toan chi phi:
-def calculate_cost_for_path(path, polygon_points=None, xy_polygon=None, cam_radius=10.0, weights=(1.0, 0.02, 0.5)):
+def calculate_cost_for_path(xy_path, xy_polygon=None, cam_radius=10.0, weights=(1.0, 0.02, 0.5)):
     """
-    path: danh sách các điểm [(lon, lat), (lon, lat), ...]
-    polygon_points: (Tùy chọn) danh sách các đỉnh polygon [(lon, lat), ...]
-    xy_polygon: (Tùy chọn) danh sách các đỉnh polygon ở hệ XY [(x,y), ...]. Ưu tiên hơn polygon_points.
+    xy_path: danh sách các điểm trong hệ XY [(x, y), (x, y), ...]
+    xy_polygon: (Tùy chọn) danh sách các đỉnh polygon ở hệ XY [(x,y), ...].
     weights: [alpha (turn), beta (length), gamma (overlap)] tương đương code MATLAB
     """
-    if not path or len(path) == 1:
-        return float('inf'), 0.0, 0, 0.0, 0.0, 0.0, 0.0
+    if xy_path is None or len(xy_path) < 2:
+        return float('inf'), 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    lon_ref, lat_ref = path[0]
     # Chuyển đổi toàn bộ path sang tọa độ phẳng (X, Y) giống hệ ENU của MATLAB
-    xy_path = np.array([latlon_to_xy(lat_ref, lon_ref, lat, lon) for lon, lat in path])
+    # xy_path được truyền trực tiếp vào
     # Tính các vector chênh lệch giữa các điểm liên tiếp
     diffs = np.diff(xy_path, axis=0)
     # 1. Tính chiều dài quỹ đạo (J_length)
@@ -1422,12 +1420,7 @@ def calculate_cost_for_path(path, polygon_points=None, xy_polygon=None, cam_radi
     # 3. Tính diện tích quét và tỉ lệ chồng lấn (J_overlap) - GIỮ NGUYÊN
     # 4. Tính diện tích quét thực tế và độ bao phủ
     if xy_polygon is None:
-        if polygon_points is None:
-            raise ValueError("Cần cung cấp polygon_points hoặc xy_polygon")
-        xy_polygon = np.array([
-            latlon_to_xy(lat_ref, lon_ref, lat, lon)
-            for lon, lat in polygon_points
-        ])
+        raise ValueError("Cần cung cấp xy_polygon")
 
     polygon = ShapelyPolygon(xy_polygon) # Tạo đa giác từ tọa độ XY
     polygon_area = polygon.area          # Tính diện tích trực tiếp từ đa giác này
@@ -1535,15 +1528,30 @@ def best_path_sw_uav(points, uav_init_point):
     best_cost_val = float("inf")
     best_path = None
 
+    # Chuyển đổi các điểm gốc sang XY và tạo đa giác bao lồi để tính toán
+    ref_lat, ref_lon = uav_init_point
+    xy_points = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in points])
+    try:
+        hull = ConvexHull(xy_points)
+        xy_polygon = xy_points[hull.vertices]
+    except Exception as e:
+        # Fallback nếu không tạo được convex hull (ví dụ: các điểm thẳng hàng)
+        print(f"[WARN] Could not create ConvexHull in best_path_sw_uav: {e}. Using bounding box as polygon.")
+        min_x, min_y = np.min(xy_points, axis=0)
+        max_x, max_y = np.max(xy_points, axis=0)
+        xy_polygon = [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
+
+
     for name, path in algos.items():
-        if not path:
+        if not path or len(path) < 2:
+            print(f"Algorithm {name}: returned no valid path. Skipping.")
             continue
-        # Cần tạo dummy polygon_points và area để hàm chạy, vì hàm này chỉ dùng để so sánh nội bộ
-        # các thuật toán với nhau, không phải để hiển thị ra giao diện.
-        dummy_polygon_points = points 
-        dummy_area = 1.0
-        cost, total_dist, turns, _, _, _, _ = calculate_cost_for_path(
-            path, polygon_points=dummy_polygon_points, polygon_area=dummy_area
+        
+        # Chuyển đổi đường đi sang XY
+        xy_path = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in path])
+
+        cost, total_dist, turns, _, _, _, _, _, _ = calculate_cost_for_path(
+            xy_path, xy_polygon=xy_polygon
         )
         print(f"Algorithm {name}: cost={cost:.3f}, dist={total_dist:.3f}, turns={turns}")
         if cost < best_cost_val:

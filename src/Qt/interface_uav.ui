@@ -558,7 +558,7 @@ background-color: rgb(252, 175, 62);</string>
                      <item row="0" column="2">
                       <widget class="QProgressBar" name="progressUAV1_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
@@ -593,14 +593,14 @@ background-color: rgb(252, 175, 62);</string>
                      <item row="1" column="2">
                       <widget class="QProgressBar" name="progressUAV2_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
                      <item row="2" column="2">
                       <widget class="QProgressBar" name="progressUAV3_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
@@ -642,14 +642,14 @@ background-color: rgb(252, 175, 62);</string>
                      <item row="4" column="2">
                       <widget class="QProgressBar" name="progressUAV5_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
                      <item row="3" column="2">
                       <widget class="QProgressBar" name="progressUAV4_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
@@ -670,7 +670,7 @@ background-color: rgb(252, 175, 62);</string>
                      <item row="5" column="2">
                       <widget class="QProgressBar" name="progressUav6_2">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>
@@ -688,7 +688,7 @@ background-color: rgb(252, 175, 62);</string>
                      <item>
                       <widget class="QProgressBar" name="progressBar">
                        <property name="value">
-                        <number>24</number>
+                        <number>0</number>
                        </property>
                       </widget>
                      </item>

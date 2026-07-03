@@ -2722,6 +2722,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                     
                     # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC
                     path = algo_map[algo_name](grid_points_latlon.copy(), start_coord)
+                    if not path:
+                        self.update_terminal(f"[SIM] Thuật toán {algo_name} không trả về đường đi. Bỏ qua.", 0)
+                        current_run += num_runs # Bỏ qua tất cả các lần chạy của thuật toán này
+                        self.ui.progressBar.setValue(current_run)
+                        self.ui.label_32.setText(f"{current_run}/{total_runs}")
+                        await asyncio.sleep(0)
+                        continue
+
                     if path and (abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7):
                         path.insert(0, start_coord)
 
@@ -2731,9 +2739,14 @@ class App(Map, StreamQtThread, Interface, QtWidgets.QWidget):
                         path = reduce_path_collinear(path)
                         reduced_point_count = len(path)
                         self.update_terminal(f"[SIM] Reduced path for {algo_name} from {original_point_count} to {reduced_point_count} waypoints.", 0)
+                    
+                    # Chuyển đổi đường đi (lat, lon) sang (x, y) để tính toán
+                    ref_lat, ref_lon = start_coord
+                    # Giả sử path là list các tuple (lat, lon)
+                    xy_path = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in path])
 
                     cost, dist, turns, swept_area, _, coverage, _, _, overlap_ratio = calculate_cost_for_path( # type: ignore
-                        path, 
+                        xy_path, 
                         xy_polygon=xy_polygon_for_calc, # Truyền trực tiếp đa giác XY
                         cam_radius=10.0
                     )
