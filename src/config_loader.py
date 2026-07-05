@@ -109,7 +109,7 @@ class ConfigLoader:
 
         # Model paths
         self.model_uav_paths = {
-            i: self.stream['model']['yolo_path_template']
+            i: self.stream['model']['yolo_path_template'].format(i=i)
             for i in range(1, self.MAX_UAV_COUNT + 1)
         }
 

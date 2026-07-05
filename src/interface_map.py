@@ -21,14 +21,18 @@ from config.stream_config import *
 from config.uav_config import *
 from interface_base import *
 from Qt.interface_uav import *
-from utils.calculation_helpers import *
 
 #
 from utils.drone_utils import *
 from utils.map_engine import *
 from utils.map_folium import *
-from utils.map_helpers import *
 from utils.qt_utils import *
+
+# --- Refactored planning modules ---
+from planning.grid import area_of_polygon, generate_grid, remove_duplicate_pts, split_polygon_into_areas_old, split_grids
+from planning.geometry import convert_to_cartesian, convert_to_lat_lon
+from planning.polygon_ops import point_on_line
+from planning.path_algorithms import best_path_sw_uav
 
 # Set timezone for Vietnam
 vietnam_tz = pytz.timezone("Asia/Ho_Chi_Minh")
@@ -619,11 +623,11 @@ class Map(Interface):
             n_areas = min(self.noArea, self.drone_num)
             logger.info(f"Requested split into {n_areas} parts")
 
-            # xử lý riêng phần chia map cho 1 drone duy nhất
+            # Handle case for 1 area (no splitting needed)
             if n_areas <= 1:
                 logger.info("Only 1 area requested. Drawing original polygon.")
 
-                # dảmd bảo rằng hình đa giác đã được hình thành
+                # Ensure polygon is closed for drawing
                 if polygon_points[0] != polygon_points[-1]:
                     polygon_points.append(polygon_points[0])
 
@@ -641,31 +645,25 @@ class Map(Interface):
                 self.sim_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
                 self.drone_areas_dict[key] = polygon_points
 
-                # lưu file
+                # Save area to file
                 area_file = f"{PARENT_DIR}/src/logs/area/area1.txt"
                 with open(area_file, "w") as file:
                     for lat, lon in polygon_points:
                         file.write(f"{lat}, {lon}\n")
 
-                # tạo dữ liệu xoay giả
-                angle = 0
-                midpoint = (sum([pt[0] for pt in polygon_points]) / len(polygon_points),
-                            sum([pt[1] for pt in polygon_points]) / len(polygon_points))
-                min_lat = min(polygon_points, key=lambda x: x[0])[0]
-                min_lon = min(polygon_points, key=lambda x: x[1])[1]
-
-                # Khởi tạo đúng extra và rotated_area_list
-                self.extra = (angle, midpoint, min_lat, min_lon)
-                self.rotated_area_list = [polygon_points]
+                # Populate necessary attributes for the next step (grid generation)
+                ref_lat = min(p[0] for p in polygon_points)
+                ref_lon = min(p[1] for p in polygon_points)
+                self.split_ref_point = (ref_lat, ref_lon)
+                self.cartesian_sub_areas = {0: convert_to_cartesian(polygon_points)}
 
                 return
+
             # Split the polygon
             n_areas = min(self.noArea, self.drone_num)
             logger.info(f"Splitting area into {n_areas} parts")
             
-            splitted_areas, rotated_area_list, angle, midpoint, min_lat, min_lon = (
-                split_polygon_into_areas_old(polygon_points, n_areas)
-            )
+            splitted_areas, rotated_area_list, angle, midpoint, min_lat, min_lon = split_polygon_into_areas_old(polygon_points, n_areas)
 
             # Draw the split areas on the map
             for ind, area in enumerate(splitted_areas):
@@ -1133,7 +1131,7 @@ class Map(Interface):
             
         try:
             # Clear previous drone markers
-            # self.remove_drone_markers()
+            self.remove_drone_markers()
             
             # Reset position lists
             self.drone_position_list = []
