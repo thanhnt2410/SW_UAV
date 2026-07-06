@@ -6,6 +6,7 @@ import subprocess
 import yaml
 from datetime import datetime
 
+# pyrefly: ignore [missing-import]
 import cv2
 import pyfiglet
 from asyncqt import QEventLoop
@@ -25,7 +26,7 @@ from interface_map import *
 # user-defined utils
 from utils.drone_utils import (
     clear_mission_logs, export_points_to_gps_log,
-    select_mission_plan, uav_rescue_process, uav_fn_upload_mission
+    select_mission_plan, uav_rescue_process
 )
 from utils.qt_utils import get_system_information, draw_table, get_values_from_table, convert_cv2qt
 from utils.serial_utils import *
@@ -33,6 +34,8 @@ from utils.stream_utils import *
 
 # user-defined services
 from services.drone_service import DroneService
+from controllers.stream_controller import StreamController
+from controllers.telemetry_controller import TelemetryController
 
 # user-defined planning
 from planning.path_algorithms import (
@@ -80,6 +83,8 @@ class App(Map):
     def __init__(self) -> None:
         self.config = config
         self.drone_service = DroneService(config)
+        self.stream_controller = StreamController(self)
+        self.telemetry_controller = TelemetryController(self)
         self.UAVs = self.drone_service.get_all_uavs() # Keep a reference for legacy UI code
         super().__init__()
         self.logger = logger
@@ -155,7 +160,7 @@ class App(Map):
         self._init_event_handlers()
         
         # Create streaming components
-        self._create_streaming_threads()
+        self.stream_controller._create_streaming_threads()
         
         # Configure settings
         self._handling_settings(mode="init")
@@ -207,7 +212,7 @@ class App(Map):
         """
         # Update connection status indicators
         for uav_index in range(1, self.config.MAX_UAV_COUNT + 1):
-            self.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
+            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
 
     def _connect_custom_signals(self) -> None:
         """
@@ -259,7 +264,7 @@ class App(Map):
 
         # Connect camera toggle button (non-async)
         self.ui.btn_toggle_camera.clicked.connect(
-            lambda: self.uav_toggle_camera_callback(self.active_tab_index)
+            lambda: self.stream_controller.uav_toggle_camera_callback(self.active_tab_index)
         )
         
         # Connect parameter buttons for each UAV
@@ -299,10 +304,10 @@ class App(Map):
             
             # Create a closure to capture the current UAV index
             def create_set_callback(uav_idx):
-                return lambda: asyncio.create_task(self.uav_fn_set_flight_info(uav_idx))
+                return lambda: asyncio.create_task(self.telemetry_controller.uav_fn_set_flight_info(uav_idx))
             
             def create_get_callback(uav_idx):
-                return lambda: asyncio.create_task(self.uav_fn_get_flight_info(uav_idx, True))
+                return lambda: asyncio.create_task(self.telemetry_controller.uav_fn_get_flight_info(uav_idx, True))
             
             # Connect Set Parameter button
             self.uav_set_param_buttons[idx].clicked.connect(create_set_callback(uav_index))
@@ -351,105 +356,105 @@ class App(Map):
                 create_command_callback(index + 1)
             )
 
-    def _create_streaming_threads(self, uav_indexes=None) -> None:
-        """
-        Create and configure video streaming threads for UAVs.
-        
-        This method sets up streaming threads for specified UAVs, configuring capture
-        settings, recording options, and object detection. It connects each thread's
-        signal to the streaming display handler.
-        
-        Args:
-            uav_indexes (list, optional): Specific UAV indexes to configure. 
-                                        If None, configures all UAVs.
-        
-        Returns:
-            None
-        """
-        
-        try:
-            # If no specific indexes provided, use all available UAVs
-            uav_indexes = range(1, self.config.MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
+#     def _create_streaming_threads(self, uav_indexes=None) -> None:
+#         """
+#         Create and configure video streaming threads for UAVs.
+#         
+#         This method sets up streaming threads for specified UAVs, configuring capture
+#         settings, recording options, and object detection. It connects each thread's
+#         signal to the streaming display handler.
+#         
+#         Args:
+#             uav_indexes (list, optional): Specific UAV indexes to configure. 
+#                                         If None, configures all UAVs.
+#         
+#         Returns:
+#             None
+#         """
+#         
+#         try:
+#             # If no specific indexes provided, use all available UAVs
+#             uav_indexes = range(1, self.config.MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
+#             
+#             for uav_index in uav_indexes:
+#                 # Skip UAVs that aren't eligible for streaming
+#                 if not self.stream_controller._can_stream(uav_index):
+#                     continue
+#                     
+#                 # Configure stream settings
+#                 stream_config = self.stream_controller._create_stream_config(uav_index)
+#                 
+#                 # Determine detection model if enabled
+#                 detection_model = (
+#                     self.uav_detection_models[uav_index - 1]
+#                     if self.UAVs[uav_index]["detection_enable"]
+#                     else None
+#                 )
+#                 
+#                 # Create the streaming thread
+#                 self.uav_stream_threads[uav_index - 1] = StreamQtThread(
+#                     uav_index=uav_index,
+#                     stream_config=stream_config,
+#                     detection_model=detection_model
+#                 )
+#                 
+#                 # Log the stream configuration
+#                 self.stream_controller._log_stream_creation(uav_index)
+#                 
+#                 # Safely connect signal to slot (disconnect first to prevent duplicate connections)
+#                 asyncio.create_task(self._connect_stream_signal(uav_index))
+#                 
+#         except Exception as e:
+#             self.logger.log(repr(e), level="error")
+#             self.popup_msg(
+#                 type_msg="Error", 
+#                 msg=repr(e), 
+#                 src_msg="_create_streaming_threads()"
+#             )
             
-            for uav_index in uav_indexes:
-                # Skip UAVs that aren't eligible for streaming
-                if not self._can_stream(uav_index):
-                    continue
-                    
-                # Configure stream settings
-                stream_config = self._create_stream_config(uav_index)
-                
-                # Determine detection model if enabled
-                detection_model = (
-                    self.uav_detection_models[uav_index - 1]
-                    if self.UAVs[uav_index]["detection_enable"]
-                    else None
-                )
-                
-                # Create the streaming thread
-                self.uav_stream_threads[uav_index - 1] = StreamQtThread(
-                    uav_index=uav_index,
-                    stream_config=stream_config,
-                    detection_model=detection_model
-                )
-                
-                # Log the stream configuration
-                self._log_stream_creation(uav_index)
-                
-                # Safely connect signal to slot (disconnect first to prevent duplicate connections)
-                asyncio.create_task(self._connect_stream_signal(uav_index))
-                
-        except Exception as e:
-            self.logger.log(repr(e), level="error")
-            self.popup_msg(
-                type_msg="Error", 
-                msg=repr(e), 
-                src_msg="_create_streaming_threads()"
-            )
-            
-    def _create_stream_config(self, uav_index):
-        """Create stream configuration dictionary for a UAV"""
+#     def _create_stream_config(self, uav_index):
+#         """Create stream configuration dictionary for a UAV"""
+#         
+#         # Capture settings
+#         capture = {
+#             "index": uav_index,
+#             "address": self.UAVs[uav_index]["streaming_address"],
+#             "width": self.config.stream['source']['default_size']['width'],
+#             "height": self.config.stream['source']['default_size']['height'],
+#             "fps": self.config.stream['source']['default_fps'],
+#         }
+#         
+#         # Recording settings
+#         writer = {
+#             "index": uav_index,
+#             "enable": self.UAVs[uav_index]["recording_enable"],
+#             "filename": self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
+#             "fourcc": self.config.stream['source']['fourcc'],
+#             "frameSize": (self.config.stream['source']['default_size']['width'],
+#                           self.config.stream['source']['default_size']['height']),
+#         }
+#         
+#         return {
+#             "capture": capture,
+#             "writer": writer,
+#         }
         
-        # Capture settings
-        capture = {
-            "index": uav_index,
-            "address": self.UAVs[uav_index]["streaming_address"],
-            "width": self.config.stream['source']['default_size']['width'],
-            "height": self.config.stream['source']['default_size']['height'],
-            "fps": self.config.stream['source']['default_fps'],
-        }
-        
-        # Recording settings
-        writer = {
-            "index": uav_index,
-            "enable": self.UAVs[uav_index]["recording_enable"],
-            "filename": self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
-            "fourcc": self.config.stream['source']['fourcc'],
-            "frameSize": (self.config.stream['source']['default_size']['width'],
-                          self.config.stream['source']['default_size']['height']),
-        }
-        
-        return {
-            "capture": capture,
-            "writer": writer,
-        }
-        
-    def _log_stream_creation(self, uav_index):
-        """Log the creation of a streaming thread"""
-        recording_path = (
-            os.path.relpath(self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
-            if self.UAVs[uav_index]["recording_enable"]
-            else 'None'
-        )
-        
-        self.logger.log(
-            f"UAV-{uav_index} stream started:\n"
-            f"  -- Capture stream from {os.path.relpath(self.UAVs[uav_index]['streaming_address'], __current_path__)}\n"
-            f"  -- Save recording to {recording_path}",
-            level="info",
-        )
-        
-        self.logger.log(f"UAV-{uav_index} streaming thread created!", level="info")
+#     def _log_stream_creation(self, uav_index):
+#         """Log the creation of a streaming thread"""
+#         recording_path = (
+#             os.path.relpath(self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
+#             if self.UAVs[uav_index]["recording_enable"]
+#             else 'None'
+#         )
+#         
+#         self.logger.log(
+#             f"UAV-{uav_index} stream started:\n"
+#             f"  -- Capture stream from {os.path.relpath(self.UAVs[uav_index]['streaming_address'], __current_path__)}\n"
+#             f"  -- Save recording to {recording_path}",
+#             level="info",
+#         )
+#         
+#         self.logger.log(f"UAV-{uav_index} streaming thread created!", level="info")
         
     async def _connect_stream_signal(self, uav_index):
         """Connect the streaming thread signal to the display slot"""
@@ -695,7 +700,7 @@ class App(Map):
             self.UAVs[uav_index]["status"]["streaming_status"] = False
         
         # Recreate streaming threads with new configuration
-        self._create_streaming_threads()
+        self.stream_controller._create_streaming_threads()
         self.logger.log("Updated UAV configuration from table data", level="info")
 
     def _update_tables(
@@ -801,8 +806,8 @@ class App(Map):
                 # * 1. control movement command
                 if command in ["forward", "backward", "left", "right", "up", "down"]:
                     distance = float(value)
-                    await uav_fn_goto_distance(
-                        drone=self.UAVs[self.active_tab_index],
+                    await self.drone_service.uav_fn_goto_distance(
+                        uav_index=uav_index,
                         distance=distance,
                         direction=command,
                     )
@@ -815,8 +820,8 @@ class App(Map):
                         if command == "pitch"
                         else {"pitch": 0, "yaw": angle}
                     )
-                    await uav_fn_control_gimbal(
-                        drone=self.UAVs[self.active_tab_index], control_value=control_value
+                    await self.drone_service.uav_fn_control_gimbal(
+                        uav_index=uav_index, control_value=control_value
                     )
 
         except Exception as e:
@@ -875,21 +880,21 @@ class App(Map):
             uav_data = self.drone_service.get_uav(uav_index)
             if uav_data:
                 uav_data["status"]["connection_status"] = False
-                self.set_connection_display(uav_index, uav_data["status"])
+                self.telemetry_controller.set_connection_display(uav_index, uav_data["status"])
 
             await self.drone_service.connect(uav_index)
 
             self.update_terminal(f"[INFO] Received CONNECT signal from UAV {uav_index}")
-            self.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
+            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
 
-            await self.uav_fn_get_status(uav_index, verbose=True)
+            await self.telemetry_controller.uav_fn_get_status(uav_index, verbose=True)
             # The map is now updated automatically by uav_fn_get_position.
 
         except Exception as e:
             uav_data = self.drone_service.get_uav(uav_index)
             if uav_data:
                 uav_data["status"]["connection_status"] = False
-                self.set_connection_display(uav_index, uav_data["status"])
+                self.telemetry_controller.set_connection_display(uav_index, uav_data["status"])
             self.logger.log(f"Connection error to UAV {uav_index}: {repr(e)}", level="error")
             self.popup_msg( # type: ignore
                 f"Connection error to UAV {uav_index}: {repr(e)}",
@@ -929,11 +934,11 @@ class App(Map):
             await self.drone_service.arm(uav_index)
             await asyncio.sleep(3)
             await self.uav_disarm_callback(uav_index)
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.drone_service.get_uav(uav_index)["status"]["arming_status"] = "DISARMED"
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
             # Lấy thông báo lỗi chi tiết thay vì dùng repr(e)
             error_detail = str(e)
@@ -972,7 +977,7 @@ class App(Map):
         try:
             self.update_terminal(f"[INFO] Sent DISARM command to UAV {uav_index}")
             await self.drone_service.disarm(uav_index)
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Disarming error: {repr(e)}", level="error")
@@ -1011,7 +1016,7 @@ class App(Map):
             self.update_terminal(f"[INFO] Sent TAKEOFF command to UAV {uav_index}")
             await self.drone_service.takeoff(uav_index)
             await self._save_initial_position(uav_index)
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Takeoff error: {repr(e)}", level="error")
@@ -1078,7 +1083,7 @@ class App(Map):
         try:
             self.update_terminal(f"[INFO] Sent LANDING command to UAV {uav_index}")
             await self.drone_service.land(uav_index)
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Landing error: {repr(e)}", level="error")
@@ -1139,7 +1144,7 @@ class App(Map):
                 self.UAVs[uav_index]["status"]["mode_status"] = "RETURN" # goto_location sets a different mode
             
             # Update display
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
             # Clean up mission logs
             clear_mission_logs(uav_index, save_dir=__current_path__)
@@ -1187,7 +1192,7 @@ class App(Map):
             # await self._execute_standard_mission(uav_index)
             await asyncio.gather(
                 self._execute_standard_mission(uav_index),
-                # self.uav_fn_get_position(uav_index),
+                # self.telemetry_controller.uav_fn_get_position(uav_index),
             )
         
         # Handle rescue UAV mission
@@ -1235,7 +1240,7 @@ class App(Map):
             if not progress_task.done():
                 progress_task.cancel()
             # Update display
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
             # Check if mission is finished and initiate return if needed
             if await self.drone_service.get_uav(uav_index)["system"].mission.is_mission_finished():
@@ -1276,10 +1281,10 @@ class App(Map):
                 if self._check_uav_connection(i):
                     self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
                     push_tasks.append(
-                        uav_fn_upload_mission(drone=self.UAVs[i], mission_plan_file=mission_file)
+                        self.drone_service.uav_fn_upload_mission(uav_index=i, mission_plan_file=mission_file)
                     )
                     self.UAVs[i]["status"]["mode_status"] = "Mission uploaded"
-                    self._update_uav_info_display(i)
+                    self.telemetry_controller._update_uav_info_display(i)
 
             if push_tasks:
                 asyncio.create_task(asyncio.gather(*push_tasks))
@@ -1313,14 +1318,14 @@ class App(Map):
     async def _async_push_mission(self, uav_index, mission_file):
         try:
             self.update_terminal(f"[INFO] Uploading mission from {mission_file} to UAV {uav_index}")
-            await uav_fn_upload_mission(drone=self.UAVs[uav_index], mission_plan_file=mission_file)
+            await self.drone_service.uav_fn_upload_mission(uav_index=uav_index, mission_plan_file=mission_file)
             
             # 2. Ép con trỏ waypoint bắt đầu từ điểm xuất phát (index 0)
             await self.UAVs[uav_index]["system"].mission.set_current_mission_item(0)
 
             # Update status
             self.UAVs[uav_index]["status"]["mode_status"] = "Mission uploaded"
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             logger.log(f"Mission push error: {repr(e)}", level="error")
@@ -1372,7 +1377,7 @@ class App(Map):
                     self._set_pause_button_style("Pause")
             
             # Update display
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Mission toggle error: {repr(e)}", level="error")
@@ -1413,7 +1418,7 @@ class App(Map):
         try:            
             self.update_terminal(f"[INFO] Toggling actuator for UAV {uav_index}")
             await self.drone_service.toggle_actuator(uav_index)
-            self._update_uav_info_display(uav_index)
+            self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Actuator toggle error: {repr(e)}", level="error")
@@ -1423,71 +1428,71 @@ class App(Map):
                 type_msg="Error"
             )
 
-    def uav_toggle_camera_callback(self, uav_index) -> None:
-        """
-        Toggle camera streaming for a specific UAV or all UAVs.
-        
-        This method starts or stops the video streaming thread for the 
-        specified UAV(s).
-        
-        Args:
-            uav_index (int): The UAV to toggle camera (1-MAX_UAV_COUNT),
-                            or 0 for all UAVs
-            
-        Returns:
-            None
-        """
-        
-        # Handle the case of toggling all UAVs
-        if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
-            for i in range(1, self.config.MAX_UAV_COUNT + 1):
-                # Only toggle UAVs that are eligible for streaming
-                if self._can_stream(i):
-                    self.uav_toggle_camera_callback(i)
-            return
-        
-        # Skip if UAV is not eligible for streaming
-        if not self._can_stream(uav_index):
-            self.logger.log(
-                f"Camera toggle skipped for UAV {uav_index}: not eligible for streaming",
-                level="warning"
-            )
-            return
-            
-        try:
-            # Determine current streaming state
-            is_streaming = self.UAVs[uav_index]["status"]["streaming_status"]
-            
-            if not is_streaming:
-                # Start streaming
-                if self.uav_stream_threads[uav_index - 1] is None:
-                    self._create_streaming_threads(uav_indexes=[uav_index])
-                    
-                self.uav_stream_threads[uav_index - 1].start()
-                self.UAVs[uav_index]["status"]["streaming_status"] = True
-                
-                self.logger.log(f"UAV-{uav_index} streaming started", level="info")
-                self.ui.btn_toggle_camera.setStyleSheet("background-color: green")
-            else:
-                # Stop streaming
-                self.uav_stream_threads[uav_index - 1].stop()
-                self.UAVs[uav_index]["status"]["streaming_status"] = False
-                
-                self.logger.log(f"UAV-{uav_index} streaming stopped", level="info")
-                self.ui.btn_toggle_camera.setStyleSheet("background-color: red")
-            
-            # Update thread status
-            self.uav_stream_threads[uav_index - 1].isRunning = self.UAVs[uav_index]["status"][
-                "streaming_status"
-            ]
-            
-        except Exception as e:
-            self.logger.log(f"Camera toggle error: {repr(e)}", level="error")
-            self.popup_msg(
-                f"Error toggling camera: {repr(e)}", 
-                src_msg="uav_toggle_camera_callback",
-                type_msg="Error"
-            )
+#     def uav_toggle_camera_callback(self, uav_index) -> None:
+#         """
+#         Toggle camera streaming for a specific UAV or all UAVs.
+#         
+#         This method starts or stops the video streaming thread for the 
+#         specified UAV(s).
+#         
+#         Args:
+#             uav_index (int): The UAV to toggle camera (1-MAX_UAV_COUNT),
+#                             or 0 for all UAVs
+#             
+#         Returns:
+#             None
+#         """
+#         
+#         # Handle the case of toggling all UAVs
+#         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
+#             for i in range(1, self.config.MAX_UAV_COUNT + 1):
+#                 # Only toggle UAVs that are eligible for streaming
+#                 if self.stream_controller._can_stream(i):
+#                     self.stream_controller.uav_toggle_camera_callback(i)
+#             return
+#         
+#         # Skip if UAV is not eligible for streaming
+#         if not self.stream_controller._can_stream(uav_index):
+#             self.logger.log(
+#                 f"Camera toggle skipped for UAV {uav_index}: not eligible for streaming",
+#                 level="warning"
+#             )
+#             return
+#             
+#         try:
+#             # Determine current streaming state
+#             is_streaming = self.UAVs[uav_index]["status"]["streaming_status"]
+#             
+#             if not is_streaming:
+#                 # Start streaming
+#                 if self.uav_stream_threads[uav_index - 1] is None:
+#                     self.stream_controller._create_streaming_threads(uav_indexes=[uav_index])
+#                     
+#                 self.uav_stream_threads[uav_index - 1].start()
+#                 self.UAVs[uav_index]["status"]["streaming_status"] = True
+#                 
+#                 self.logger.log(f"UAV-{uav_index} streaming started", level="info")
+#                 self.ui.btn_toggle_camera.setStyleSheet("background-color: green")
+#             else:
+#                 # Stop streaming
+#                 self.uav_stream_threads[uav_index - 1].stop()
+#                 self.UAVs[uav_index]["status"]["streaming_status"] = False
+#                 
+#                 self.logger.log(f"UAV-{uav_index} streaming stopped", level="info")
+#                 self.ui.btn_toggle_camera.setStyleSheet("background-color: red")
+#             
+#             # Update thread status
+#             self.uav_stream_threads[uav_index - 1].isRunning = self.UAVs[uav_index]["status"][
+#                 "streaming_status"
+#             ]
+#             
+#         except Exception as e:
+#             self.logger.log(f"Camera toggle error: {repr(e)}", level="error")
+#             self.popup_msg(
+#                 f"Error toggling camera: {repr(e)}", 
+#                 src_msg="uav_toggle_camera_callback",
+#                 type_msg="Error"
+#             )
 
     async def uav_goto_callback(self, uav_index, page="settings", *args) -> None:
         
@@ -1516,7 +1521,7 @@ class App(Map):
                 self.update_terminal(
                     f"[INFO] Sent GOTO command to UAV {uav_index}: lat={latitude}, lon={longitude}")
                 await self.drone_service.goto_location(uav_index, latitude, longitude)
-                self._update_uav_info_display(uav_index)
+                self.telemetry_controller._update_uav_info_display(uav_index)
             else:
                 # Command all UAVs to go to the same position
                 goto_tasks = []
@@ -1526,7 +1531,7 @@ class App(Map):
                             f"[INFO] Sent GOTO command to UAV {i}: lat={latitude}, lon={longitude}"
                         )
                         goto_tasks.append(self.drone_service.goto_location(i, latitude, longitude))
-                        self._update_uav_info_display(i)
+                        self.telemetry_controller._update_uav_info_display(i)
                         
                 if goto_tasks:
                     await asyncio.gather(*goto_tasks)
@@ -1597,81 +1602,81 @@ class App(Map):
         except Exception as e:
             self.logger.log(f"Failed to update position log for UAV {uav_index}: {e}", level="warning")
 
-    def _update_uav_info_display(self, uav_index):
-        """Update the information display for a UAV."""
+#     def _update_uav_info_display(self, uav_index):
+#         """Update the information display for a UAV."""
+#         
+#         self.uav_information_views[uav_index - 1].setText(
+#             self.telemetry_controller.template_information(uav_index, **self.UAVs[uav_index]["status"])
+#         )
         
-        self.uav_information_views[uav_index - 1].setText(
-            self.template_information(uav_index, **self.UAVs[uav_index]["status"])
-        )
-        
-    def set_connection_display(self, uav_index, uav_status):
-        """
-        Updates the connection status of a UAV in the UI.
-
-        Args:
-            uav_index (int): The index of the UAV to update.
-            status (bool): The connection status of the UAV.
-
-        Returns:
-            None
-        """
-        
-        if uav_status["connection_status"]:
-            self.uav_label_params[uav_index - 1].setStyleSheet("background-color: green")
-        else:
-            self.uav_label_params[uav_index - 1].setStyleSheet("background-color: red")
-
-        self.uav_information_views[uav_index - 1].setText(
-            self.template_information(uav_index, **uav_status)
-        )
+#     def set_connection_display(self, uav_index, uav_status):
+#         """
+#         Updates the connection status of a UAV in the UI.
+# 
+#         Args:
+#             uav_index (int): The index of the UAV to update.
+#             status (bool): The connection status of the UAV.
+# 
+#         Returns:
+#             None
+#         """
+#         
+#         if uav_status["connection_status"]:
+#             self.uav_label_params[uav_index - 1].setStyleSheet("background-color: green")
+#         else:
+#             self.uav_label_params[uav_index - 1].setStyleSheet("background-color: red")
+# 
+#         self.uav_information_views[uav_index - 1].setText(
+#             self.telemetry_controller.template_information(uav_index, **uav_status)
+#         )
 
     # --------------------------<UAVs get status functions>-----------------------------
-    async def uav_fn_get_status(self, uav_index, verbose=1) -> None:
-        """
-        Retrieve and update all status information for a UAV or all UAVs.
-        
-        This function fetches and updates position, mode, battery, arm status, GPS info,
-        and flight parameters for the specified UAV. It can also handle retrieving status
-        for all UAVs when uav_index is out of range.
-        
-        Args:
-            uav_index (int): The UAV to get status for (1-MAX_UAV_COUNT), or out of range for all UAVs
-            verbose (int): If 1, also display status text messages in the terminal
-            
-        Returns:
-            None
-        """
-        
-        # Handle getting status for all UAVs
-        if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
-            status_tasks = [
-                self.uav_fn_get_status(i, verbose=verbose) # type: ignore
-                for i in range(1, self.config.MAX_UAV_COUNT + 1)
-                if self.UAVs[i]["connection_allow"]
-            ]
-            await asyncio.gather(*status_tasks)
-            return
-        
-        # Skip if UAV is not connected and not allowed
-        if not (self.UAVs[uav_index]["status"]["connection_status"] and self.UAVs[uav_index]["connection_allow"]):
-            return
-        
-        try:
-            await self.drone_service.get_status(uav_index)
-            self._update_uav_info_display(uav_index)
-            await self.uav_fn_get_flight_info(uav_index, copy=False) # Keep UI-related param logic here
-            if verbose:
-                await self.uav_fn_print_status(uav_index)
-            
-        except Exception as e:
-            self.logger.log(f"Failed to get status for UAV {uav_index}: {e}", level="error")
-            self.UAVs[uav_index]["status"]["connection_status"] = False
-            self.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
-            self.popup_msg(
-                f"Error retrieving UAV {uav_index} status: {repr(e)}", 
-                src_msg="uav_fn_get_status", 
-                type_msg="error"
-            )
+#     async def uav_fn_get_status(self, uav_index, verbose=1) -> None:
+#         """
+#         Retrieve and update all status information for a UAV or all UAVs.
+#         
+#         This function fetches and updates position, mode, battery, arm status, GPS info,
+#         and flight parameters for the specified UAV. It can also handle retrieving status
+#         for all UAVs when uav_index is out of range.
+#         
+#         Args:
+#             uav_index (int): The UAV to get status for (1-MAX_UAV_COUNT), or out of range for all UAVs
+#             verbose (int): If 1, also display status text messages in the terminal
+#             
+#         Returns:
+#             None
+#         """
+#         
+#         # Handle getting status for all UAVs
+#         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
+#             status_tasks = [
+#                 self.telemetry_controller.uav_fn_get_status(i, verbose=verbose) # type: ignore
+#                 for i in range(1, self.config.MAX_UAV_COUNT + 1)
+#                 if self.UAVs[i]["connection_allow"]
+#             ]
+#             await asyncio.gather(*status_tasks)
+#             return
+#         
+#         # Skip if UAV is not connected and not allowed
+#         if not (self.UAVs[uav_index]["status"]["connection_status"] and self.UAVs[uav_index]["connection_allow"]):
+#             return
+#         
+#         try:
+#             await self.drone_service.get_status(uav_index)
+#             self.telemetry_controller._update_uav_info_display(uav_index)
+#             await self.telemetry_controller.uav_fn_get_flight_info(uav_index, copy=False) # Keep UI-related param logic here
+#             if verbose:
+#                 await self.telemetry_controller.uav_fn_print_status(uav_index)
+#             
+#         except Exception as e:
+#             self.logger.log(f"Failed to get status for UAV {uav_index}: {e}", level="error")
+#             self.UAVs[uav_index]["status"]["connection_status"] = False
+#             self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
+#             self.popup_msg(
+#                 f"Error retrieving UAV {uav_index} status: {repr(e)}", 
+#                 src_msg="uav_fn_get_status", 
+#                 type_msg="error"
+#             )
 
     #SEND COORDINATE ham gui tin nhan
     async def send_coordinate(self) -> None:
@@ -1709,234 +1714,234 @@ class App(Map):
         except serial.SerialException as e:
             self.ui.mainTerminal.appendPlainText("Error: " + str(e))
 
-    async def uav_fn_get_position(self, uav_index) -> None:
-        """
-        Retrieve and update position data for a UAV.
-        """
-        # This function is now just a wrapper for UI updates after the service gets the data.
-        # The actual data fetching is in drone_service.get_status()
-        await self.drone_service.get_status(uav_index)
-        uav_data = self.drone_service.get_uav(uav_index)
-        self._update_position_log(uav_index, uav_data["status"]["position_status"][0], uav_data["status"]["position_status"][1], uav_data["status"]["altitude_status"][1])
-        self._update_uav_info_display(uav_index)
+#     async def uav_fn_get_position(self, uav_index) -> None:
+#         """
+#         Retrieve and update position data for a UAV.
+#         """
+#         # This function is now just a wrapper for UI updates after the service gets the data.
+#         # The actual data fetching is in drone_service.get_status()
+#         await self.drone_service.get_status(uav_index)
+#         uav_data = self.drone_service.get_uav(uav_index)
+#         self._update_position_log(uav_index, uav_data["status"]["position_status"][0], uav_data["status"]["position_status"][1], uav_data["status"]["altitude_status"][1])
+#         self.telemetry_controller._update_uav_info_display(uav_index)
 
-    async def uav_fn_get_mode(self, uav_index) -> None:
-        """This logic is now in DroneService.get_status()"""
-        pass
-    async def uav_fn_get_battery(self, uav_index) -> None:
-        """This logic is now in DroneService.get_status()"""
-        pass
-    async def uav_fn_get_arm_status(self, uav_index) -> None:
-        """This logic is now in DroneService.get_status()"""
-        pass
-    async def uav_fn_get_gps(self, uav_index) -> None:
-        """This logic is now in DroneService.get_status()"""
-        pass
+#     async def uav_fn_get_mode(self, uav_index) -> None:
+#         """This logic is now in DroneService.get_status()"""
+#         pass
+#     async def uav_fn_get_battery(self, uav_index) -> None:
+#         """This logic is now in DroneService.get_status()"""
+#         pass
+#     async def uav_fn_get_arm_status(self, uav_index) -> None:
+#         """This logic is now in DroneService.get_status()"""
+#         pass
+#     async def uav_fn_get_gps(self, uav_index) -> None:
+#         """This logic is now in DroneService.get_status()"""
+#         pass
 
-    async def uav_fn_get_flight_info(self, uav_index, copy=False) -> None:
-        """
-        Retrieve and update flight parameters for a UAV.
-        
-        This function gets the current flight parameters from the UAV and updates
-        the parameter display fields in the UI. If 'copy' is True, it also copies 
-        the values to the parameter input fields.
-        
-        Args:
-            uav_index (int): The UAV to get parameters for (1-MAX_UAV_COUNT)
-            copy (bool): If True, copy parameters to input fields
-            
-        Returns:
-            None
-        """
-        
-        try:
-            # Get parameters from the service
-            parameters = await self.drone_service.get_params(uav_index, self.config.interface['displayed_parameters'])
-            
-            # Update parameter display fields
-            for i, (param_name, value) in enumerate(parameters.items()):
-                # Format the value to one decimal place
-                formatted_value = str(round(value, 1))
-                
-                # Update the display field
-                self.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
-                
-                # If requested, also copy to the input field
-                if copy:
-                    self.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
-                    
-        except Exception as e:
-            self.logger.log(f"Failed to get flight parameters for UAV {uav_index}: {e}", level="error")
-            self.popup_msg(
-                f"Error retrieving flight parameters: {repr(e)}", 
-                src_msg="uav_fn_get_flight_info", 
-                type_msg="error"
-            )
+#     async def uav_fn_get_flight_info(self, uav_index, copy=False) -> None:
+#         """
+#         Retrieve and update flight parameters for a UAV.
+#         
+#         This function gets the current flight parameters from the UAV and updates
+#         the parameter display fields in the UI. If 'copy' is True, it also copies 
+#         the values to the parameter input fields.
+#         
+#         Args:
+#             uav_index (int): The UAV to get parameters for (1-MAX_UAV_COUNT)
+#             copy (bool): If True, copy parameters to input fields
+#             
+#         Returns:
+#             None
+#         """
+#         
+#         try:
+#             # Get parameters from the service
+#             parameters = await self.drone_service.get_params(uav_index, self.config.interface['displayed_parameters'])
+#             
+#             # Update parameter display fields
+#             for i, (param_name, value) in enumerate(parameters.items()):
+#                 # Format the value to one decimal place
+#                 formatted_value = str(round(value, 1))
+#                 
+#                 # Update the display field
+#                 self.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
+#                 
+#                 # If requested, also copy to the input field
+#                 if copy:
+#                     self.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
+#                     
+#         except Exception as e:
+#             self.logger.log(f"Failed to get flight parameters for UAV {uav_index}: {e}", level="error")
+#             self.popup_msg(
+#                 f"Error retrieving flight parameters: {repr(e)}", 
+#                 src_msg="uav_fn_get_flight_info", 
+#                 type_msg="error"
+#             )
 
-    async def uav_fn_set_flight_info(self, uav_index) -> None:
-        """
-        Set flight parameters for a UAV.
-        
-        This function gets parameter values from the input fields, validates them,
-        and sends them to the UAV. It then refreshes the parameter display.
-        
-        Args:
-            uav_index (int): The UAV to set parameters for (1-MAX_UAV_COUNT)
-            
-        Returns:
-            None
-        """
-        
-        try:
-            # Initialize parameters dictionary
-            parameters = {}
-            
-            # Get widgets containing current and new values
-            input_widgets = self.uav_param_sets[uav_index - 1].children()[1:-1]
-            display_widgets = self.uav_param_displays[uav_index - 1].children()[1:-1]
-            
-            # Populate parameters from input fields, falling back to current values if empty
-            for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
-                param_name = self.config.interface['displayed_parameters'][i]
-                input_text = input_widget.text()
-                
-                if not input_text:
-                    # Use current value if input is empty
-                    parameters[param_name] = float(display_widget.text())
-                else:
-                    try:
-                        # Validate and convert input to float
-                        parameters[param_name] = float(input_text)
-                    except ValueError:
-                        # Handle invalid input
-                        self.logger.log(f"Invalid value for parameter {param_name}: {input_text}", level="warning")
-                        self.popup_msg(
-                            f"Invalid value for {param_name}: {input_text}", 
-                            src_msg="uav_fn_set_flight_info", 
-                            type_msg="Warning"
-                        )
-                        # Use current value instead
-                        parameters[param_name] = float(display_widget.text())
-            
-            await self.drone_service.set_params(uav_index, parameters)
-            
-            # Refresh parameter display
-            await self.uav_fn_get_flight_info(uav_index=uav_index, copy=False)
-            
-            # Log and display success message
-            self.logger.log(f"Updated flight parameters for UAV {uav_index}", level="info")
-            self.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
-            
-        except Exception as e:
-            self.logger.log(f"Failed to set flight parameters for UAV {uav_index}: {e}", level="error")
-            self.popup_msg(
-                f"Error setting flight parameters: {repr(e)}", 
-                src_msg="uav_fn_set_flight_info", 
-                type_msg="Error"
-            )
+#     async def uav_fn_set_flight_info(self, uav_index) -> None:
+#         """
+#         Set flight parameters for a UAV.
+#         
+#         This function gets parameter values from the input fields, validates them,
+#         and sends them to the UAV. It then refreshes the parameter display.
+#         
+#         Args:
+#             uav_index (int): The UAV to set parameters for (1-MAX_UAV_COUNT)
+#             
+#         Returns:
+#             None
+#         """
+#         
+#         try:
+#             # Initialize parameters dictionary
+#             parameters = {}
+#             
+#             # Get widgets containing current and new values
+#             input_widgets = self.uav_param_sets[uav_index - 1].children()[1:-1]
+#             display_widgets = self.uav_param_displays[uav_index - 1].children()[1:-1]
+#             
+#             # Populate parameters from input fields, falling back to current values if empty
+#             for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
+#                 param_name = self.config.interface['displayed_parameters'][i]
+#                 input_text = input_widget.text()
+#                 
+#                 if not input_text:
+#                     # Use current value if input is empty
+#                     parameters[param_name] = float(display_widget.text())
+#                 else:
+#                     try:
+#                         # Validate and convert input to float
+#                         parameters[param_name] = float(input_text)
+#                     except ValueError:
+#                         # Handle invalid input
+#                         self.logger.log(f"Invalid value for parameter {param_name}: {input_text}", level="warning")
+#                         self.popup_msg(
+#                             f"Invalid value for {param_name}: {input_text}", 
+#                             src_msg="uav_fn_set_flight_info", 
+#                             type_msg="Warning"
+#                         )
+#                         # Use current value instead
+#                         parameters[param_name] = float(display_widget.text())
+#             
+#             await self.drone_service.set_params(uav_index, parameters)
+#             
+#             # Refresh parameter display
+#             await self.telemetry_controller.uav_fn_get_flight_info(uav_index=uav_index, copy=False)
+#             
+#             # Log and display success message
+#             self.logger.log(f"Updated flight parameters for UAV {uav_index}", level="info")
+#             self.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
+#             
+#         except Exception as e:
+#             self.logger.log(f"Failed to set flight parameters for UAV {uav_index}: {e}", level="error")
+#             self.popup_msg(
+#                 f"Error setting flight parameters: {repr(e)}", 
+#                 src_msg="uav_fn_set_flight_info", 
+#                 type_msg="Error"
+#             )
 
-    async def uav_fn_print_status(self, uav_index) -> None:
-        """
-        Display status text messages from a UAV in the terminal.
-        
-        Args:
-            uav_index (int): The UAV to get status messages from (1-MAX_UAV_COUNT)
-            
-        Returns:
-            None
-        """
-        
-        # Skip if UAV is not connected or not allowed
-        if not self._check_uav_connection(uav_index):
-            return
-        
-        try:
-            # Get and display status text messages
-            async for status in self.drone_service.get_uav(uav_index)["system"].telemetry.status_text():
-                # Format the status message
-                status_text = f"> {status.type} - {status.text}"
-                
-                # Display in the terminal
-                self.update_terminal(status_text, uav_index)
-                
-                # Log to file based on severity
-                if status.type.name in ["ERROR", "CRITICAL"]:
-                    self.logger.log(f"UAV {uav_index}: {status.text}", level="error")
-                elif status.type.name == "WARNING":
-                    self.logger.log(f"UAV {uav_index}: {status.text}", level="warning")
-                else:
-                    self.logger.log(f"UAV {uav_index}: {status.text}", level="debug")
-                    
-        except Exception as e:
-            self.logger.log(f"Failed to print status for UAV {uav_index}: {e}", level="error")
+#     async def uav_fn_print_status(self, uav_index) -> None:
+#         """
+#         Display status text messages from a UAV in the terminal.
+#         
+#         Args:
+#             uav_index (int): The UAV to get status messages from (1-MAX_UAV_COUNT)
+#             
+#         Returns:
+#             None
+#         """
+#         
+#         # Skip if UAV is not connected or not allowed
+#         if not self._check_uav_connection(uav_index):
+#             return
+#         
+#         try:
+#             # Get and display status text messages
+#             async for status in self.drone_service.get_uav(uav_index)["system"].telemetry.status_text():
+#                 # Format the status message
+#                 status_text = f"> {status.type} - {status.text}"
+#                 
+#                 # Display in the terminal
+#                 self.update_terminal(status_text, uav_index)
+#                 
+#                 # Log to file based on severity
+#                 if status.type.name in ["ERROR", "CRITICAL"]:
+#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="error")
+#                 elif status.type.name == "WARNING":
+#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="warning")
+#                 else:
+#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="debug")
+#                     
+#         except Exception as e:
+#             self.logger.log(f"Failed to print status for UAV {uav_index}: {e}", level="error")
 
     # -----------------------------< UAVs streaming functions >-----------------------------
-    @pyqtSlot(np.ndarray, list)
-    def stream_on_uav_screen(self, annotated_frame=None, results=None) -> None:
-        """
-        Display video stream on the UAV screen with optional object detection annotations.
-        
-        This method processes video frames for display in the UAV interface. It handles raw 
-        or annotated frames with detection results, manages frame rate throttling, and exports 
-        detection data when targets are found.
-        
-        Args:
-            frame (np.ndarray): The original video frame without annotations
-            annotated_frame (np.ndarray): The frame with detection annotations
-            results (list): Contains [uav_index, current_fps, detected_results] where:
-                            - uav_index: The UAV identifier
-                            - current_fps: Current frames per second
-                            - detected_results: Detection results including track IDs and object data
-        
-        Returns:
-            None
-
-        Notes:
-            - The method only processes frames if UAV connection is allowed and streaming is enabled
-            - Frame rate is limited according to DEFAULT_STREAM_FPS
-            - When detection is enabled and a person is detected, the frame is saved and GPS coordinates
-            are exported to logs
-        """
-
-        if not results:
-            self.logger.log("Received empty results in stream handler", level="warning")
-            return
-            
-        # Unpack the results
-        uav_index, current_fps, detected_results = results
-        uav_index = int(uav_index)
-        
-        # Skip processing if UAV is not eligible for streaming
-        if not self._can_stream(uav_index):
-            return
-            
-        try:
-            # Apply frame rate limiting
-            if not self._should_process_frame(uav_index, current_fps):
-                return
-                
-            # Select the appropriate frame to display
-            streaming_frame = annotated_frame
-            
-            # Display the frame
-            asyncio.create_task(self.update_uav_screen_view(
-                uav_index, streaming_frame, screen_name=self.config.stream['display']['default_screen']
-            ))
-            
-            # Process detection results if available and detection is enabled
-            if self.UAVs[uav_index]["detection_enable"] and detected_results:
-                asyncio.create_task(self._process_detection_results(uav_index, annotated_frame, detected_results))
-
-                
-        except Exception as e:
-            # Update status and show error message
-            self.UAVs[uav_index]["status"]["streaming_status"] = False
-            self.logger.log(f"Stream display error for UAV {uav_index}: {repr(e)}", level="error")
-            self.popup_msg(
-                f"Stream display error: {repr(e)}",
-                src_msg="stream_on_uav_screen",
-                type_msg="error",
-            )
+#     @pyqtSlot(np.ndarray, list)
+#     def stream_on_uav_screen(self, annotated_frame=None, results=None) -> None:
+#         """
+#         Display video stream on the UAV screen with optional object detection annotations.
+#         
+#         This method processes video frames for display in the UAV interface. It handles raw 
+#         or annotated frames with detection results, manages frame rate throttling, and exports 
+#         detection data when targets are found.
+#         
+#         Args:
+#             frame (np.ndarray): The original video frame without annotations
+#             annotated_frame (np.ndarray): The frame with detection annotations
+#             results (list): Contains [uav_index, current_fps, detected_results] where:
+#                             - uav_index: The UAV identifier
+#                             - current_fps: Current frames per second
+#                             - detected_results: Detection results including track IDs and object data
+#         
+#         Returns:
+#             None
+# 
+#         Notes:
+#             - The method only processes frames if UAV connection is allowed and streaming is enabled
+#             - Frame rate is limited according to DEFAULT_STREAM_FPS
+#             - When detection is enabled and a person is detected, the frame is saved and GPS coordinates
+#             are exported to logs
+#         """
+# 
+#         if not results:
+#             self.logger.log("Received empty results in stream handler", level="warning")
+#             return
+#             
+#         # Unpack the results
+#         uav_index, current_fps, detected_results = results
+#         uav_index = int(uav_index)
+#         
+#         # Skip processing if UAV is not eligible for streaming
+#         if not self.stream_controller._can_stream(uav_index):
+#             return
+#             
+#         try:
+#             # Apply frame rate limiting
+#             if not self.stream_controller._should_process_frame(uav_index, current_fps):
+#                 return
+#                 
+#             # Select the appropriate frame to display
+#             streaming_frame = annotated_frame
+#             
+#             # Display the frame
+#             asyncio.create_task(self.update_uav_screen_view(
+#                 uav_index, streaming_frame, screen_name=self.config.stream['display']['default_screen']
+#             ))
+#             
+#             # Process detection results if available and detection is enabled
+#             if self.UAVs[uav_index]["detection_enable"] and detected_results:
+#                 asyncio.create_task(self._process_detection_results(uav_index, annotated_frame, detected_results))
+# 
+#                 
+#         except Exception as e:
+#             # Update status and show error message
+#             self.UAVs[uav_index]["status"]["streaming_status"] = False
+#             self.logger.log(f"Stream display error for UAV {uav_index}: {repr(e)}", level="error")
+#             self.popup_msg(
+#                 f"Stream display error: {repr(e)}",
+#                 src_msg="stream_on_uav_screen",
+#                 type_msg="error",
+#             )
             
             
     def _check_uav_connection(self, uav_index, strictly=True):
@@ -1948,28 +1953,28 @@ class App(Map):
             return (self.UAVs[uav_index]["status"]["connection_status"] or
                     self.UAVs[uav_index]["connection_allow"])
             
-    def _can_stream(self, uav_index):
-        """Check if UAV is eligible for stream display."""
-        return (
-            self._check_uav_connection(uav_index=uav_index, strictly=False) and 
-            self.UAVs[uav_index]["streaming_enable"]
-        )
+#     def _can_stream(self, uav_index):
+#         """Check if UAV is eligible for stream display."""
+#         return (
+#             self._check_uav_connection(uav_index=uav_index, strictly=False) and 
+#             self.UAVs[uav_index]["streaming_enable"]
+#         )
 
-    def _should_process_frame(self, uav_index, current_fps):
-        """Apply frame rate limiting to avoid overloading the UI."""
-        # Calculate the frame skip rate to achieve target FPS
-        max_frame_cnt = max(1, current_fps // self.config.stream['source']['default_fps'])
-        
-        # Increment the frame counter for this UAV
-        self.uav_stream_frame_cnt[uav_index - 1] += 1
-        
-        # Process frame if it's time to display based on our rate limiting
-        return self.uav_stream_frame_cnt[uav_index - 1] % max_frame_cnt == 0
+#     def _should_process_frame(self, uav_index, current_fps):
+#         """Apply frame rate limiting to avoid overloading the UI."""
+#         # Calculate the frame skip rate to achieve target FPS
+#         max_frame_cnt = max(1, current_fps // self.config.stream['source']['default_fps'])
+#         
+#         # Increment the frame counter for this UAV
+#         self.uav_stream_frame_cnt[uav_index - 1] += 1
+#         
+#         # Process frame if it's time to display based on our rate limiting
+#         return self.uav_stream_frame_cnt[uav_index - 1] % max_frame_cnt == 0
 
-    def _select_frame_type(self, uav_index, frame, annotated_frame):
-        """Select which frame to display based on detection settings."""
-        # Use annotated frame if detection is enabled, otherwise use raw frame
-        return annotated_frame if self.UAVs[uav_index]["detection_enable"] else frame
+#     def _select_frame_type(self, uav_index, frame, annotated_frame):
+#         """Select which frame to display based on detection settings."""
+#         # Use annotated frame if detection is enabled, otherwise use raw frame
+#         return annotated_frame if self.UAVs[uav_index]["detection_enable"] else frame
 
     async def _process_detection_results(self, uav_index, annotated_frame, detected_results):
         """Process object detection results and handle detected targets."""
@@ -2174,7 +2179,7 @@ class App(Map):
 
         # Lấy vị trí HIỆN TẠI của UAV 1 làm trung tâm và điểm xuất phát
         # thay vì vị trí khởi tạo trong config.
-        await self.uav_fn_get_position(1)
+        await self.telemetry_controller.uav_fn_get_position(1)
         start_lat = self.UAVs[1]["status"]["position_status"][0]
         start_lon = self.UAVs[1]["status"]["position_status"][1]
 
@@ -2584,7 +2589,7 @@ class App(Map):
             
             # Kích hoạt hàm cất cánh và bay (hàm uav_fn_do_mission sẽ tự động block cho đến khi UAV đáp đất hoàn toàn)
             self.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
-            await uav_fn_do_mission(drone=self.UAVs[uav_index], mission_plan_file=plan_file)
+            await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
             
             # Hủy các task ngầm khi chuyến bay đã kết thúc và đợi chúng cleanup.
             background_tasks = [rtl_task, progress_task]
@@ -2627,7 +2632,7 @@ class App(Map):
     #             self._set_pause_button_style("Pause")
                 
     #         # Chạy hàm mission chuẩn (đã bao gồm cất cánh và làm nhiệm vụ)
-    #         await uav_fn_do_mission(drone=self.UAVs[uav_index], mission_plan_file=plan_file)
+    #         await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
             
     #         # Kiểm tra nếu hoàn thành thì RTL (Quay về)
     #         if await self.UAVs[uav_index]["system"].mission.is_mission_finished():
@@ -2644,21 +2649,6 @@ class App(Map):
     # ------------------------------------< Rescue UAV 6 >-----------------------------
     # ? developing ...
     async def uav_fn_rescue(self) -> None:
-        """
-        Perform a rescue mission using the specified UAV.
-        This function checks the connection status of the rescue UAV, connects to it,
-        verifies its health, and retrieves its initial position. It then performs the
-        rescue mission if certain conditions are met.
-        The rescue mission involves:
-        1. Checking if rescue position logs are available.
-        2. Selecting a mission plan from the available logs.
-        3. Performing the rescue mission and suspending detected UAVs.
-        4. Removing the rescue log file after the mission is completed.
-        If any error occurs during the mission, it logs the error and displays a popup message.
-        Returns:
-            None
-        """
-
         if not ( # type: ignore
             self.UAVs[self.config.RESCUE_UAV_INDEX]["status"]["connection_status"]
             and self.UAVs[self.config.RESCUE_UAV_INDEX]["connection_allow"]
