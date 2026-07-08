@@ -118,7 +118,7 @@ class MAVSDKServer:
             self.command = f"{MAVSDK_SERVER_PATH} {connection_url} -p {port}"
         else:
             self.command = (
-                f"python3 src/mavsdk_server_shell.py {connection_url} "
+                f"python3 src/mavsdk_server/mavsdk_server_shell.py {connection_url} "
                 f"-p {port} -i {id}"
             )
             
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     # Start a test server
     test_server = MAVSDKServer(
         id=1,
-        protocol="udp",
+        protocol="udpin",
         server_host="127.0.0.1",
         port=50051,
         bind_port=14540

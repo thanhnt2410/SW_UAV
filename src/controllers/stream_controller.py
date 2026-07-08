@@ -5,6 +5,7 @@ import cv2
 import os
 import numpy as np
 from PyQt5.QtCore import pyqtSlot
+from utils.stream_utils import StreamQtThread
 from utils.qt_utils import convert_cv2qt
 
 __current_path__ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,13 +30,13 @@ class StreamController:
                 
                 # Determine detection model if enabled
                 detection_model = (
-                    self.app.uav_detection_models[uav_index - 1]
-                    if self.app.UAVs[uav_index]["detection_enable"]
+                    self.app.UAVs[uav_index].detection_model
+                    if self.app.UAVs[uav_index].config.detection_enabled
                     else None
                 )
                 
                 # Create the streaming thread
-                self.app.uav_stream_threads[uav_index - 1] = StreamQtThread(
+                self.app.UAVs[uav_index].stream_thread = StreamQtThread(
                     uav_index=uav_index,
                     stream_config=stream_config,
                     detection_model=detection_model
@@ -49,10 +50,10 @@ class StreamController:
                 
         except Exception as e:
             self.app.logger.log(repr(e), level="error")
-            self.app.popup_msg(
-                type_msg="Error", 
-                msg=repr(e), 
-                src_msg="_create_streaming_threads()"
+            self.app.view.popup_msg(
+                type_msg="error", 
+                msg=f"Error creating stream thread for UAV {uav_index}: {repr(e)}", 
+                src_msg="_create_streaming_threads"
             )
 
     def _create_stream_config(self, uav_index):
@@ -61,7 +62,7 @@ class StreamController:
         # Capture settings
         capture = {
             "index": uav_index,
-            "address": self.app.UAVs[uav_index]["streaming_address"],
+            "address": self.app.UAVs[uav_index].config.streaming_address,
             "width": self.app.config.stream['source']['default_size']['width'],
             "height": self.app.config.stream['source']['default_size']['height'],
             "fps": self.app.config.stream['source']['default_fps'],
@@ -70,7 +71,7 @@ class StreamController:
         # Recording settings
         writer = {
             "index": uav_index,
-            "enable": self.app.UAVs[uav_index]["recording_enable"],
+            "enable": self.app.UAVs[uav_index].config.recording_enable,
             "filename": self.app.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
             "fourcc": self.app.config.stream['source']['fourcc'],
             "frameSize": (self.app.config.stream['source']['default_size']['width'],
@@ -86,13 +87,13 @@ class StreamController:
         """Log the creation of a streaming thread"""
         recording_path = (
             os.path.relpath(self.app.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
-            if self.app.UAVs[uav_index]["recording_enable"]
+            if self.app.UAVs[uav_index].config.recording_enable
             else 'None'
         )
         
         self.app.logger.log(
             f"UAV-{uav_index} stream started:\n"
-            f"  -- Capture stream from {os.path.relpath(self.app.UAVs[uav_index]['streaming_address'], __current_path__)}\n"
+            f"  -- Capture stream from {os.path.relpath(self.app.UAVs[uav_index].config.streaming_address, __current_path__)}\n"
             f"  -- Save recording to {recording_path}",
             level="info",
         )
@@ -128,15 +129,15 @@ class StreamController:
             ))
             
             # Process detection results if available and detection is enabled
-            if self.app.UAVs[uav_index]["detection_enable"] and detected_results:
+            if self.app.UAVs[uav_index].config.detection_enabled and detected_results:
                 asyncio.create_task(self.app._process_detection_results(uav_index, annotated_frame, detected_results))
     
                 
         except Exception as e:
             # Update status and show error message
-            self.app.UAVs[uav_index]["status"]["streaming_status"] = False
+            self.app.UAVs[uav_index].telemetry.streaming_status = False
             self.app.logger.log(f"Stream display error for UAV {uav_index}: {repr(e)}", level="error")
-            self.app.popup_msg(
+            self.app.view.popup_msg(
                 f"Stream display error: {repr(e)}",
                 src_msg="stream_on_uav_screen",
                 type_msg="error",
@@ -146,7 +147,7 @@ class StreamController:
         """Check if UAV is eligible for stream display."""
         return (
             self.app._check_uav_connection(uav_index=uav_index, strictly=False) and 
-            self.app.UAVs[uav_index]["streaming_enable"]
+            self.app.UAVs[uav_index].config.streaming_enable
         )
 
     def _should_process_frame(self, uav_index, current_fps):
@@ -155,15 +156,15 @@ class StreamController:
         max_frame_cnt = max(1, current_fps // self.app.config.stream['source']['default_fps'])
         
         # Increment the frame counter for this UAV
-        self.app.uav_stream_frame_cnt[uav_index - 1] += 1
+        self.app.UAVs[uav_index].stream_frame_count += 1
         
         # Process frame if it's time to display based on our rate limiting
-        return self.app.uav_stream_frame_cnt[uav_index - 1] % max_frame_cnt == 0
+        return self.app.UAVs[uav_index].stream_frame_count % max_frame_cnt == 0
 
     def _select_frame_type(self, uav_index, frame, annotated_frame):
         """Select which frame to display based on detection settings."""
         # Use annotated frame if detection is enabled, otherwise use raw frame
-        return annotated_frame if self.app.UAVs[uav_index]["detection_enable"] else frame
+        return annotated_frame if self.app.UAVs[uav_index].config.detection_enabled else frame
 
     def uav_toggle_camera_callback(self, uav_index) -> None:
         # Handle the case of toggling all UAVs
@@ -184,36 +185,33 @@ class StreamController:
             
         try:
             # Determine current streaming state
-            is_streaming = self.app.UAVs[uav_index]["status"]["streaming_status"]
+            is_streaming = self.app.UAVs[uav_index].telemetry.streaming_status
             
             if not is_streaming:
                 # Start streaming
-                if self.app.uav_stream_threads[uav_index - 1] is None:
+                if self.app.UAVs[uav_index].stream_thread is None:
                     self._create_streaming_threads(uav_indexes=[uav_index])
                     
-                self.app.uav_stream_threads[uav_index - 1].start()
-                self.app.UAVs[uav_index]["status"]["streaming_status"] = True
+                self.app.UAVs[uav_index].stream_thread.start()
+                self.app.UAVs[uav_index].telemetry.streaming_status = True
                 
                 self.app.logger.log(f"UAV-{uav_index} streaming started", level="info")
                 self.app.ui.btn_toggle_camera.setStyleSheet("background-color: green")
             else:
                 # Stop streaming
-                self.app.uav_stream_threads[uav_index - 1].stop()
-                self.app.UAVs[uav_index]["status"]["streaming_status"] = False
+                self.app.UAVs[uav_index].stream_thread.stop()
+                self.app.UAVs[uav_index].telemetry.streaming_status = False
                 
                 self.app.logger.log(f"UAV-{uav_index} streaming stopped", level="info")
                 self.app.ui.btn_toggle_camera.setStyleSheet("background-color: red")
             
             # Update thread status
-            self.app.uav_stream_threads[uav_index - 1].isRunning = self.app.UAVs[uav_index]["status"][
-                "streaming_status"
-            ]
+            self.app.UAVs[uav_index].stream_thread.isRunning = self.app.UAVs[uav_index].telemetry.streaming_status
             
         except Exception as e:
             self.app.logger.log(f"Camera toggle error: {repr(e)}", level="error")
-            self.app.popup_msg(
+            self.app.view.popup_msg(
                 f"Error toggling camera: {repr(e)}", 
                 src_msg="uav_toggle_camera_callback",
                 type_msg="Error"
             )
-

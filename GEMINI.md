@@ -117,6 +117,7 @@ When modifying GUI code:
 * Avoid breaking signal-slot connections.
 * Keep the UI responsive.
 * Never block the UI thread with long-running tasks.
+* **Important UI Compilation Rule**: When generating `.py` from `.ui` using `pyuic5`, `QtWebKitWidgets` is no longer supported in newer PyQt5 versions. You MUST replace `QtWebKitWidgets.QWebView` with `QWebView` and ensure `from PyQt5.QtWebEngineWidgets import QWebEngineView as QWebView` is used instead of `from PyQt5 import QtWebKitWidgets`.
 
 Use asynchronous tasks or worker threads when needed.
 

@@ -45,38 +45,8 @@ PARENT_DIR = Path(__file__).parent.parent
 DRONE_ICON_PATH = "../assets/icons/drone.png"
 DOT_ICON_PATH = "../assets/icons/red_dot.png"
 
-"""
-MAP FUNCTIONALITY NOTES:
-
-Main map (leaflet.js):
-- Interactive map that allows drawing points, lines, and polygons
-- Exports data as GeoJSON (saved to files and sent via qtwebchannel)
-- Supports adding markers, lines, and polygons from GeoJSON data
-
-Overview map (leaflet.js):
-- One-way display from Python to HTML
-- Shows points, lines, and polygons from GeoJSON data
-- Non-interactive mirror of the main map
-"""
-
-
 class Map(Interface):
-    """
-    Map class for the UAV control interface
-    
-    This class extends the base Interface to provide mapping and mission planning
-    capabilities for UAV operations, including area splitting, grid generation,
-    route planning, and visualization.
-    
-    Attributes:
-        debug (bool): Enable/disable debug print statements
-        noArea (int): Number of areas to split the polygon into
-        drone_num (int): Number of drones available
-        gridSize (int): Grid spacing in meters
-    """
-
     debug = False
-
     # Map configuration parameters
     noArea = 5
     drone_num = 5
@@ -1222,8 +1192,8 @@ class Map(Interface):
                 self.ovv_map.centerAt(first_pos[0], first_pos[1])
                 self.sim_map.centerAt(first_pos[0], first_pos[1])
             
-            print(f"[DEBUG] Loaded {loaded_drones} drone positions, using {'initial' if init else 'current'} positions")
-            print(f"[DEBUG] self.drone_initial_positions after update: {list(self.drone_initial_positions.keys())}")
+            # print(f"[DEBUG] Loaded {loaded_drones} drone positions, using {'initial' if init else 'current'} positions")
+            # print(f"[DEBUG] self.drone_initial_positions after update: {list(self.drone_initial_positions.keys())}")
 
         except Exception as e:
             logger.error(f"Error showing drones: {e}")

@@ -14,6 +14,10 @@ Example usage:
 import argparse
 import asyncio
 import sys
+import os
+
+# Add the parent directory (src) to sys.path so we can import utils.logger
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from typing import Optional
 
 from mavsdk import System
@@ -60,13 +64,11 @@ async def run(
     connection_task = asyncio.create_task(
         establish_connection(drone, system_address, id, timeout)
     )
-    
-    # Start shell observer in parallel
-    shell_task = asyncio.create_task(observe_shell(drone))
-    
     # Wait for connection
     await connection_task
-    
+    # Start shell observer in parallel
+    shell_task = asyncio.create_task(observe_shell(drone))
+      
     # If requested, perform health check
     if health_check:
         logger.info(f"Performing health check for drone {id}...")
@@ -75,6 +77,7 @@ async def run(
     # Set up stdin handling for interactive shell
     asyncio.get_event_loop().add_reader(sys.stdin, got_stdin_data, drone)
     print("nsh> ", end="", flush=True)
+    await shell_task
 
 
 async def establish_connection(
@@ -99,15 +102,32 @@ async def establish_connection(
     await drone.connect(system_address=system_address)
     
     # Create connection task with timeout
+    # try:
+    #     async with asyncio.timeout(timeout):
+    #         async for state in drone.core.connection_state():
+    #             if state.is_connected:
+    #                 logger.info(f"Connected to drone {id} successfully")
+    #                 return
+    # except asyncio.TimeoutError:
+    #     logger.error(f"Timeout connecting to drone {id}")
+    #     raise TimeoutError(f"Could not connect to drone {id} at {system_address}")
     try:
-        async with asyncio.timeout(timeout):
-            async for state in drone.core.connection_state():
-                if state.is_connected:
-                    logger.info(f"Connected to drone {id} successfully")
-                    return
+        await asyncio.wait_for(
+            _wait_connection(drone, id),
+            timeout=timeout
+        )
+
     except asyncio.TimeoutError:
         logger.error(f"Timeout connecting to drone {id}")
-        raise TimeoutError(f"Could not connect to drone {id} at {system_address}")
+        raise TimeoutError(
+            f"Could not connect to drone {id} at {system_address}"
+        )
+
+async def _wait_connection(drone, id):
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            logger.info(f"Connected to drone {id} successfully")
+            return
 
 
 async def verify_health(drone: System, id: int, timeout: int) -> None:
@@ -288,18 +308,19 @@ if __name__ == "__main__":
         logger.error(f"Unhandled exception: {e}")
     finally:
         # Ensure proper cleanup
-        try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(cleanup())
+        sys.exit(0)
+        # try:
+        #     loop = asyncio.get_event_loop()
+        #     loop.run_until_complete(cleanup())
             
-            # Cancel pending tasks
-            pending = asyncio.all_tasks(loop=loop)
-            for task in pending:
-                task.cancel()
+        #     # Cancel pending tasks
+        #     pending = asyncio.all_tasks(loop=loop)
+        #     for task in pending:
+        #         task.cancel()
                 
-            if pending:
-                loop.run_until_complete(asyncio.wait(pending, timeout=5))
-        except Exception as e:
-            logger.error(f"Error during final cleanup: {e}")
-        finally:
-            sys.exit(0)
+        #     if pending:
+        #         loop.run_until_complete(asyncio.wait(pending, timeout=5))
+        # except Exception as e:
+        #     logger.error(f"Error during final cleanup: {e}")
+        # finally:
+        #     sys.exit(0)

@@ -8,22 +8,22 @@ class TelemetryController:
     def __init__(self, app):
         self.app = app
 
-    def set_connection_display(self, uav_index, uav_status):
+    def set_connection_display(self, uav_index, telemetry):
         
-        if uav_status["connection_status"]:
-            self.app.uav_label_params[uav_index - 1].setStyleSheet("background-color: green")
+        if telemetry.connected:
+            self.app.view.uav_label_params[uav_index - 1].setStyleSheet("background-color: green")
         else:
-            self.app.uav_label_params[uav_index - 1].setStyleSheet("background-color: red")
+            self.app.view.uav_label_params[uav_index - 1].setStyleSheet("background-color: red")
     
-        self.app.uav_information_views[uav_index - 1].setText(
-            self.template_information(uav_index, **uav_status)
+        self.app.view.uav_information_views[uav_index - 1].setText(
+            self.app.view.template_information(uav_index, telemetry)
         )
 
     def _update_uav_info_display(self, uav_index):
         """Update the information display for a UAV."""
         
-        self.app.uav_information_views[uav_index - 1].setText(
-            self.template_information(uav_index, **self.app.UAVs[uav_index]["status"])
+        self.app.view.uav_information_views[uav_index - 1].setText(
+            self.app.view.template_information(uav_index, self.app.UAVs[uav_index].telemetry)
         )
 
     async def uav_fn_get_status(self, uav_index, verbose=1) -> None:
@@ -32,13 +32,13 @@ class TelemetryController:
             status_tasks = [
                 self.uav_fn_get_status(i, verbose=verbose) # type: ignore
                 for i in range(1, self.app.config.MAX_UAV_COUNT + 1)
-                if self.app.UAVs[i]["connection_allow"]
+                if self.app.UAVs[i].config.connection_allow
             ]
             await asyncio.gather(*status_tasks)
             return
         
         # Skip if UAV is not connected and not allowed
-        if not (self.app.UAVs[uav_index]["status"]["connection_status"] and self.app.UAVs[uav_index]["connection_allow"]):
+        if not (self.app.UAVs[uav_index].telemetry.connected and self.app.UAVs[uav_index].config.connection_allow):
             return
         
         try:
@@ -50,9 +50,9 @@ class TelemetryController:
             
         except Exception as e:
             self.app.logger.log(f"Failed to get status for UAV {uav_index}: {e}", level="error")
-            self.app.UAVs[uav_index]["status"]["connection_status"] = False
-            self.set_connection_display(uav_index, self.app.UAVs[uav_index]["status"])
-            self.app.popup_msg(
+            self.app.UAVs[uav_index].telemetry.connected = False
+            self.set_connection_display(uav_index, self.app.UAVs[uav_index].telemetry)
+            self.app.view.popup_msg(
                 f"Error retrieving UAV {uav_index} status: {repr(e)}", 
                 src_msg="uav_fn_get_status", 
                 type_msg="error"
@@ -61,7 +61,7 @@ class TelemetryController:
     async def uav_fn_get_position(self, uav_index) -> None:
         await self.app.drone_service.get_status(uav_index)
         uav_data = self.app.drone_service.get_uav(uav_index)
-        self.app._update_position_log(uav_index, uav_data["status"]["position_status"][0], uav_data["status"]["position_status"][1], uav_data["status"]["altitude_status"][1])
+        self.app._update_position_log(uav_index, uav_data.telemetry.latitude, uav_data.telemetry.longitude, uav_data.telemetry.altitude_msl_m)
         self._update_uav_info_display(uav_index)
 
     async def uav_fn_get_mode(self, uav_index) -> None:
@@ -91,15 +91,15 @@ class TelemetryController:
                 formatted_value = str(round(value, 1))
                 
                 # Update the display field
-                self.app.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
+                self.app.view.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
                 
                 # If requested, also copy to the input field
                 if copy:
-                    self.app.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
+                    self.app.view.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
                     
         except Exception as e:
             self.app.logger.log(f"Failed to get flight parameters for UAV {uav_index}: {e}", level="error")
-            self.app.popup_msg(
+            self.app.view.popup_msg(
                 f"Error retrieving flight parameters: {repr(e)}", 
                 src_msg="uav_fn_get_flight_info", 
                 type_msg="error"
@@ -112,8 +112,8 @@ class TelemetryController:
             parameters = {}
             
             # Get widgets containing current and new values
-            input_widgets = self.app.uav_param_sets[uav_index - 1].children()[1:-1]
-            display_widgets = self.app.uav_param_displays[uav_index - 1].children()[1:-1]
+            input_widgets = self.app.view.uav_param_sets[uav_index - 1].children()[1:-1]
+            display_widgets = self.app.view.uav_param_displays[uav_index - 1].children()[1:-1]
             
             # Populate parameters from input fields, falling back to current values if empty
             for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
@@ -130,7 +130,7 @@ class TelemetryController:
                     except ValueError:
                         # Handle invalid input
                         self.app.logger.log(f"Invalid value for parameter {param_name}: {input_text}", level="warning")
-                        self.app.popup_msg(
+                        self.app.view.popup_msg(
                             f"Invalid value for {param_name}: {input_text}", 
                             src_msg="uav_fn_set_flight_info", 
                             type_msg="Warning"
@@ -145,11 +145,11 @@ class TelemetryController:
             
             # Log and display success message
             self.app.logger.log(f"Updated flight parameters for UAV {uav_index}", level="info")
-            self.app.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
+            self.app.view.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
             
         except Exception as e:
             self.app.logger.log(f"Failed to set flight parameters for UAV {uav_index}: {e}", level="error")
-            self.app.popup_msg(
+            self.app.view.popup_msg(
                 f"Error setting flight parameters: {repr(e)}", 
                 src_msg="uav_fn_set_flight_info", 
                 type_msg="Error"
@@ -162,12 +162,12 @@ class TelemetryController:
         
         try:
             # Get and display status text messages
-            async for status in self.app.drone_service.get_uav(uav_index)["system"].telemetry.status_text():
+            async for status in self.app.drone_service.get_uav(uav_index).system.telemetry.status_text():
                 # Format the status message
                 status_text = f"> {status.type} - {status.text}"
                 
                 # Display in the terminal
-                self.app.update_terminal(status_text, uav_index)
+                self.app.view.update_terminal(status_text, uav_index)
                 
                 # Log to file based on severity
                 if status.type.name in ["ERROR", "CRITICAL"]:

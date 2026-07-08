@@ -6,12 +6,13 @@ import subprocess
 import yaml
 from datetime import datetime
 
-# pyrefly: ignore [missing-import]
 import cv2
+
 import pyfiglet
 from asyncqt import QEventLoop
 # PyQt5
 from PyQt5 import QtWidgets
+# pyrefly: ignore [missing-import]
 from PyQt5.QtWidgets import QFileDialog
 
 # ultralytics
@@ -35,6 +36,7 @@ from utils.stream_utils import *
 # user-defined services
 from services.drone_service import DroneService
 from controllers.stream_controller import StreamController
+from mavsdk_server.mavsdk_server_utils import MAVSDKServer
 from controllers.telemetry_controller import TelemetryController
 
 # user-defined planning
@@ -77,8 +79,7 @@ print("CURRENT TIME:", __current_time__)
 
 logger.log(f"Application initializing...", level="info")
 
-
-class App(Map):
+class MainController:
 
     def __init__(self) -> None:
         self.config = config
@@ -86,28 +87,32 @@ class App(Map):
         self.stream_controller = StreamController(self)
         self.telemetry_controller = TelemetryController(self)
         self.UAVs = self.drone_service.get_all_uavs() # Keep a reference for legacy UI code
-        super().__init__()
+        
+        # Initialize UI via Composition
+        from interface_map import Map
+        self.view = Map()
+        self.ui = self.view.ui
         self.logger = logger
-        self.uav_stream_threads = [None for _ in range(self.config.MAX_UAV_COUNT)]
-        self.uav_stream_frame_cnt = [0 for _ in range(self.config.MAX_UAV_COUNT)]
         self.logger.log(f"Initialize detection model on {self.config.stream['source'].get('device', 'cpu')}...", level="info")
-        #
         start_time = time.time()
-        self.uav_detection_models = [
-            YOLO(self.config.model_uav_paths[uav_index]) for uav_index in range(1, self.config.MAX_UAV_COUNT + 1)
-        ]
+        for uav_idx in range(1, self.config.MAX_UAV_COUNT + 1):
+            if uav_idx in self.UAVs:
+                try:
+                    from ultralytics import YOLO
+                    self.UAVs[uav_idx].detection_model = YOLO(self.config.model_uav_paths[uav_idx])
+                except Exception as e:
+                    self.logger.log(f"Failed to load YOLO model for UAV {uav_idx}: {e}", level="error")
         self.logger.log(
             f"Detection models loaded successfully in {(time.time() - start_time):3f}s!",
             level="info",
         )
-        #
         self.init_application()
         self.logger.log("Application initialized successfully", level="info")
 
     def _update_action_buttons_state(self, tab_index: int) -> None:
         """Update action buttons based on the selected tab"""
         if tab_index in range(1, self.config.MAX_UAV_COUNT + 1):
-            is_on_mission = self.UAVs[tab_index]["status"].get("on_mission", False)
+            is_on_mission = self.UAVs[tab_index].telemetry.on_mission
             if is_on_mission:
                 self._set_pause_button_style("Pause")
             else:
@@ -212,7 +217,7 @@ class App(Map):
         """
         # Update connection status indicators
         for uav_index in range(1, self.config.MAX_UAV_COUNT + 1):
-            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
+            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index].telemetry)
 
     def _connect_custom_signals(self) -> None:
         """
@@ -241,16 +246,16 @@ class App(Map):
         """
         # Define button mappings for main control functions
         button_mappings = {
-            self.ui.btn_arm: lambda: self.uav_arm_callback(self.active_tab_index),
-            self.ui.btn_disarm: lambda: self.uav_disarm_callback(self.active_tab_index),
-            self.ui.btn_open_close: lambda: self.uav_toggle_open_callback(self.active_tab_index),
-            self.ui.btn_landing: lambda: self.uav_land_callback(self.active_tab_index),
-            self.ui.btn_take_off: lambda: self.uav_takeoff_callback(self.active_tab_index),
-            self.ui.btn_pause_resume: lambda: self.uav_toggle_pause_mission_callback(self.active_tab_index),
-            self.ui.btn_connect: lambda: self.uav_connect_callback(self.active_tab_index),
-            self.ui.btn_rtl: lambda: self.uav_return_callback(self.active_tab_index, rtl=True),
-            self.ui.btn_return: lambda: self.uav_return_callback(self.active_tab_index, rtl=False),
-            self.ui.btn_mission: lambda: self.uav_mission_callback(self.active_tab_index)
+            self.ui.btn_arm: lambda: self.uav_arm_callback(self.view.active_tab_index),
+            self.ui.btn_disarm: lambda: self.uav_disarm_callback(self.view.active_tab_index),
+            self.ui.btn_open_close: lambda: self.uav_toggle_open_callback(self.view.active_tab_index),
+            self.ui.btn_landing: lambda: self.uav_land_callback(self.view.active_tab_index),
+            self.ui.btn_take_off: lambda: self.uav_takeoff_callback(self.view.active_tab_index),
+            self.ui.btn_pause_resume: lambda: self.uav_toggle_pause_mission_callback(self.view.active_tab_index),
+            self.ui.btn_connect: lambda: self.uav_connect_callback(self.view.active_tab_index),
+            self.ui.btn_rtl: lambda: self.uav_return_callback(self.view.active_tab_index, rtl=True),
+            self.ui.btn_return: lambda: self.uav_return_callback(self.view.active_tab_index, rtl=False),
+            self.ui.btn_mission: lambda: self.uav_mission_callback(self.view.active_tab_index)
         }
         
         # Connect main control buttons
@@ -259,12 +264,12 @@ class App(Map):
         
         # Xử lý riêng nút Push Mission để tránh lỗi kẹt Asyncio Loop với QFileDialog
         self.ui.btn_push_mission.clicked.connect(
-            lambda: self.uav_push_mission_sync_handler(self.active_tab_index)
+            lambda: self.uav_push_mission_sync_handler(self.view.active_tab_index)
         )
 
         # Connect camera toggle button (non-async)
         self.ui.btn_toggle_camera.clicked.connect(
-            lambda: self.stream_controller.uav_toggle_camera_callback(self.active_tab_index)
+            lambda: self.stream_controller.uav_toggle_camera_callback(self.view.active_tab_index)
         )
         
         # Connect parameter buttons for each UAV
@@ -310,10 +315,10 @@ class App(Map):
                 return lambda: asyncio.create_task(self.telemetry_controller.uav_fn_get_flight_info(uav_idx, True))
             
             # Connect Set Parameter button
-            self.uav_set_param_buttons[idx].clicked.connect(create_set_callback(uav_index))
+            self.view.uav_set_param_buttons[idx].clicked.connect(create_set_callback(uav_index))
             
             # Connect Get Parameter button
-            self.uav_get_param_buttons[idx].clicked.connect(create_get_callback(uav_index))
+            self.view.uav_get_param_buttons[idx].clicked.connect(create_get_callback(uav_index))
 
     def _connect_goto_buttons(self) -> None:
         # GoTo button mapping for settings and overview pages
@@ -330,12 +335,12 @@ class App(Map):
                 )
             
             # Connect Settings page GoTo button
-            self.uav_sett_goTo_buttons[uav_index].clicked.connect(
+            self.view.uav_sett_goTo_buttons[uav_index].clicked.connect(
                 create_goto_settings_callback(uav_index)
             )
             
             # Connect Overview page GoTo button
-            self.uav_ovv_goTo_buttons[uav_index].clicked.connect(
+            self.view.uav_ovv_goTo_buttons[uav_index].clicked.connect(
                 create_goto_overview_callback(uav_index)
             )
 
@@ -352,121 +357,24 @@ class App(Map):
                 return lambda: asyncio.create_task(self.process_command(uav_idx))
             
             # Connect the returnPressed event to the process_command function
-            self.uav_update_commands[index].returnPressed.connect(
+            self.view.uav_update_commands[index].returnPressed.connect(
                 create_command_callback(index + 1)
             )
 
-#     def _create_streaming_threads(self, uav_indexes=None) -> None:
-#         """
-#         Create and configure video streaming threads for UAVs.
-#         
-#         This method sets up streaming threads for specified UAVs, configuring capture
-#         settings, recording options, and object detection. It connects each thread's
-#         signal to the streaming display handler.
-#         
-#         Args:
-#             uav_indexes (list, optional): Specific UAV indexes to configure. 
-#                                         If None, configures all UAVs.
-#         
-#         Returns:
-#             None
-#         """
-#         
-#         try:
-#             # If no specific indexes provided, use all available UAVs
-#             uav_indexes = range(1, self.config.MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
-#             
-#             for uav_index in uav_indexes:
-#                 # Skip UAVs that aren't eligible for streaming
-#                 if not self.stream_controller._can_stream(uav_index):
-#                     continue
-#                     
-#                 # Configure stream settings
-#                 stream_config = self.stream_controller._create_stream_config(uav_index)
-#                 
-#                 # Determine detection model if enabled
-#                 detection_model = (
-#                     self.uav_detection_models[uav_index - 1]
-#                     if self.UAVs[uav_index]["detection_enable"]
-#                     else None
-#                 )
-#                 
-#                 # Create the streaming thread
-#                 self.uav_stream_threads[uav_index - 1] = StreamQtThread(
-#                     uav_index=uav_index,
-#                     stream_config=stream_config,
-#                     detection_model=detection_model
-#                 )
-#                 
-#                 # Log the stream configuration
-#                 self.stream_controller._log_stream_creation(uav_index)
-#                 
-#                 # Safely connect signal to slot (disconnect first to prevent duplicate connections)
-#                 asyncio.create_task(self._connect_stream_signal(uav_index))
-#                 
-#         except Exception as e:
-#             self.logger.log(repr(e), level="error")
-#             self.popup_msg(
-#                 type_msg="Error", 
-#                 msg=repr(e), 
-#                 src_msg="_create_streaming_threads()"
-#             )
             
-#     def _create_stream_config(self, uav_index):
-#         """Create stream configuration dictionary for a UAV"""
-#         
-#         # Capture settings
-#         capture = {
-#             "index": uav_index,
-#             "address": self.UAVs[uav_index]["streaming_address"],
-#             "width": self.config.stream['source']['default_size']['width'],
-#             "height": self.config.stream['source']['default_size']['height'],
-#             "fps": self.config.stream['source']['default_fps'],
-#         }
-#         
-#         # Recording settings
-#         writer = {
-#             "index": uav_index,
-#             "enable": self.UAVs[uav_index]["recording_enable"],
-#             "filename": self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1],
-#             "fourcc": self.config.stream['source']['fourcc'],
-#             "frameSize": (self.config.stream['source']['default_size']['width'],
-#                           self.config.stream['source']['default_size']['height']),
-#         }
-#         
-#         return {
-#             "capture": capture,
-#             "writer": writer,
-#         }
         
-#     def _log_stream_creation(self, uav_index):
-#         """Log the creation of a streaming thread"""
-#         recording_path = (
-#             os.path.relpath(self.config.DEFAULT_STREAM_VIDEO_LOG_PATHS[uav_index - 1], __current_path__)
-#             if self.UAVs[uav_index]["recording_enable"]
-#             else 'None'
-#         )
-#         
-#         self.logger.log(
-#             f"UAV-{uav_index} stream started:\n"
-#             f"  -- Capture stream from {os.path.relpath(self.UAVs[uav_index]['streaming_address'], __current_path__)}\n"
-#             f"  -- Save recording to {recording_path}",
-#             level="info",
-#         )
-#         
-#         self.logger.log(f"UAV-{uav_index} streaming thread created!", level="info")
         
     async def _connect_stream_signal(self, uav_index):
         """Connect the streaming thread signal to the display slot"""
         try:
             # Try to disconnect any existing connection to prevent duplicates
-            self.uav_stream_threads[uav_index - 1].change_image_signal.disconnect()
+            self.UAVs[uav_index].stream_thread.change_image_signal.disconnect()
         except Exception:
             # Ignore errors if there was no existing connection
             pass
             
         # Connect the signal to the slot with queued connection type
-        self.uav_stream_threads[uav_index - 1].change_image_signal.connect(
+        self.UAVs[uav_index].stream_thread.change_image_signal.connect(
             self.stream_on_uav_screen,
             Qt.QueuedConnection
         )
@@ -495,7 +403,7 @@ class App(Map):
             
         except Exception as e:
             self.logger.log(f"Error handling settings in '{mode}' mode: {e}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 msg=f"Error handling settings: {e}", 
                 src_msg="_handling_settings", 
                 type_msg="Error"
@@ -518,42 +426,42 @@ class App(Map):
         try:
             if mode == "init":
                 # Initialize UI checkboxes based on configuration
-                for i, widget in enumerate(self.sett_checkBox_detect_lists):
-                    widget.setChecked(self.UAVs[i + 1]["detection_enable"])
+                for i, widget in enumerate(self.view.sett_checkBox_detect_lists):
+                    widget.setChecked(self.UAVs[i + 1].config.detection_enabled)
                     
-                for i, widget in enumerate(self.ovv_checkBox_detect_lists):
-                    widget.setChecked(self.UAVs[i + 1]["detection_enable"])
+                for i, widget in enumerate(self.view.ovv_checkBox_detect_lists):
+                    widget.setChecked(self.UAVs[i + 1].config.detection_enabled)
                     
-                for i, widget in enumerate(self.sett_checkBox_active_lists):
-                    widget.setChecked(self.UAVs[i + 1]["streaming_enable"])
+                for i, widget in enumerate(self.view.sett_checkBox_active_lists):
+                    widget.setChecked(self.UAVs[i + 1].config.streaming_enable)
                     
             elif mode == "settings":
                 # Update UAV settings from Settings page UI
-                for i, widget in enumerate(self.sett_checkBox_detect_lists):
-                    self.UAVs[i + 1]["detection_enable"] = widget.isChecked()
+                for i, widget in enumerate(self.view.sett_checkBox_detect_lists):
+                    self.UAVs[i + 1].config.detection_enabled = widget.isChecked()
                     
                 # Sync to Overview page
-                for i, widget in enumerate(self.ovv_checkBox_detect_lists):
-                    widget.setChecked(self.UAVs[i + 1]["detection_enable"])
+                for i, widget in enumerate(self.view.ovv_checkBox_detect_lists):
+                    widget.setChecked(self.UAVs[i + 1].config.detection_enabled)
                     
                 # Update streaming settings
-                for i, widget in enumerate(self.sett_checkBox_active_lists):
-                    self.UAVs[i + 1]["streaming_enable"] = widget.isChecked()
+                for i, widget in enumerate(self.view.sett_checkBox_active_lists):
+                    self.UAVs[i + 1].config.streaming_enable = widget.isChecked()
                     
             elif mode == "overview":
                 # Update UAV settings from Overview page UI
-                for i, widget in enumerate(self.ovv_checkBox_detect_lists):
-                    self.UAVs[i + 1]["detection_enable"] = widget.isChecked()
+                for i, widget in enumerate(self.view.ovv_checkBox_detect_lists):
+                    self.UAVs[i + 1].config.detection_enabled = widget.isChecked()
                     
                 # Sync to Settings page
-                for i, widget in enumerate(self.sett_checkBox_detect_lists):
-                    widget.setChecked(self.UAVs[i + 1]["detection_enable"])
+                for i, widget in enumerate(self.view.sett_checkBox_detect_lists):
+                    widget.setChecked(self.UAVs[i + 1].config.detection_enabled)
                     
             self.logger.log(f"Checkbox settings updated in '{mode}' mode", level="debug")
             
         except Exception as e:
             self.logger.log(f"Error handling checkboxes in '{mode}' mode: {e}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 msg=f"Error handling checkboxes: {e}", 
                 src_msg="_handling_checkboxes", 
                 type_msg="Error"
@@ -584,11 +492,11 @@ class App(Map):
                 data = {
                     headers[0]: [uav_index for uav_index in range(1, self.config.MAX_UAV_COUNT + 1)],
                     headers[1]: [
-                        f"{self.UAVs[uav_index]['system_address']} -p {self.UAVs[uav_index]['system']._port}"
+                        f"{self.UAVs[uav_index].config.system_address} -p {self.UAVs[uav_index].system._port}"
                         for uav_index in range(1, self.config.MAX_UAV_COUNT + 1)
                     ],
                     headers[2]: [
-                        self.UAVs[uav_index]['streaming_address']
+                        self.UAVs[uav_index].config.streaming_address
                         for uav_index in range(1, self.config.MAX_UAV_COUNT + 1)
                     ],
                 }
@@ -625,7 +533,7 @@ class App(Map):
             
         except Exception as e:
             self.logger.log(f"Error handling tables in '{mode}' mode: {e}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 msg=f"Error handling tables: {e}", 
                 src_msg="_handling_tables", 
                 type_msg="Error"
@@ -645,12 +553,12 @@ class App(Map):
         if feature_type == "connection":
             return [
                 index + 1 for index in range(self.config.MAX_UAV_COUNT) 
-                if self.UAVs[index + 1]["connection_allow"]
+                if self.UAVs[index + 1].config.connection_allow
             ]
         elif feature_type == "streaming":
             return [
                 index + 1 for index in range(self.config.MAX_UAV_COUNT) 
-                if self.UAVs[index + 1]["streaming_enable"]
+                if self.UAVs[index + 1].config.streaming_enable
             ]
         else:
             return []
@@ -679,7 +587,7 @@ class App(Map):
                 bind_port = server_parts.split(":", 1)[1] if ":" in server_parts else "0"
                 
                 # Update MAVSDK server configuration
-                self.UAVs[uav_index]["server"]["shell"] = MAVSDKServer(
+                self.UAVs[uav_index].server["shell"] = MAVSDKServer(
                     id=uav_index,
                     protocol=proto,
                     server_host=server_host,
@@ -688,16 +596,16 @@ class App(Map):
                 )
                 
                 # Update connection addresses
-                self.UAVs[uav_index]["system_address"] = f"{proto}:{server_parts}"
-                self.UAVs[uav_index]["system"]._port = int(client_port)
+                self.UAVs[uav_index].config.system_address = f"{proto}:{server_parts}"
+                self.UAVs[uav_index].system._port = int(client_port)
                 
                 # Update streaming address
-                self.UAVs[uav_index]["streaming_address"] = data["streaming_address"][index].strip()
+                self.UAVs[uav_index].config.streaming_address = data["streaming_address"][index].strip()
         
         # Reset connection and streaming status after configuration change
         for uav_index in range(1, self.config.MAX_UAV_COUNT + 1):
-            self.UAVs[uav_index]["status"]["connection_status"] = False
-            self.UAVs[uav_index]["status"]["streaming_status"] = False
+            self.UAVs[uav_index].telemetry.connected = False
+            self.UAVs[uav_index].telemetry.streaming_status = False
         
         # Recreate streaming threads with new configuration
         self.stream_controller._create_streaming_threads()
@@ -770,32 +678,32 @@ class App(Map):
         """
 
         try:
-            text = self.uav_update_commands[uav_index - 1].text()
+            text = self.view.uav_update_commands[uav_index - 1].text()
             if "=" not in text:
                 command = text.strip().lower()
 
                 if command == "gimbal":
                     self.open_gimbal_c12()
                 else:
-                    self.popup_msg(
+                    self.view.popup_msg(
                         f"Unknown command: {command}",
                         src_msg="process_command",
                         type_msg="Error",
                     )
 
-                self.uav_update_commands[uav_index - 1].clear()
+                self.view.uav_update_commands[uav_index - 1].clear()
                 return
             
             if not (
-                self.UAVs[uav_index]["status"]["connection_status"]
-                and self.UAVs[uav_index]["connection_allow"]
+                self.UAVs[uav_index].telemetry.connected
+                and self.UAVs[uav_index].config.connection_allow
             ):
                 return
 
-            text = self.uav_update_commands[uav_index - 1].text()
+            text = self.view.uav_update_commands[uav_index - 1].text()
 
             if text.lower().strip() == "hold":
-                await self.UAVs[uav_index]["system"].action.hold()
+                await self.UAVs[uav_index].system.action.hold()
             else:
                 command, value = str(text).split("=")
                 command = command.strip().lower()
@@ -825,7 +733,7 @@ class App(Map):
                     )
 
         except Exception as e:
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Invalid input: {repr(e)}", src_msg="process_command", type_msg="Error"
             )
     # open gimbalc12...................................................................
@@ -834,7 +742,7 @@ class App(Map):
         try:
             subprocess.Popen([sys.executable, GIMBAL_C12_PATH])
         except Exception as e:
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Không mở được GimbalC12.py: {repr(e)}",
                 src_msg="open_gimbal_c12",
                 type_msg="Error",
@@ -871,21 +779,21 @@ class App(Map):
             return
 
         # Skip if connection is not allowed
-        if not self.UAVs[uav_index]["connection_allow"]:
-            self.update_terminal(f"[INFO] Connection not allowed for UAV {uav_index}")
+        if not self.UAVs[uav_index].config.connection_allow:
+            self.view.update_terminal(f"[INFO] Connection not allowed for UAV {uav_index}")
             return
             
         try:
-            self.update_terminal(f"[INFO] Sent CONNECT command to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Sent CONNECT command to UAV {uav_index}")
             uav_data = self.drone_service.get_uav(uav_index)
             if uav_data:
-                uav_data["status"]["connection_status"] = False
-                self.telemetry_controller.set_connection_display(uav_index, uav_data["status"])
+                uav_data.telemetry.connected = False
+                self.telemetry_controller.set_connection_display(uav_index, uav_data.telemetry)
 
             await self.drone_service.connect(uav_index)
 
-            self.update_terminal(f"[INFO] Received CONNECT signal from UAV {uav_index}")
-            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
+            self.view.update_terminal(f"[INFO] Received CONNECT signal from UAV {uav_index}")
+            self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index].telemetry)
 
             await self.telemetry_controller.uav_fn_get_status(uav_index, verbose=True)
             # The map is now updated automatically by uav_fn_get_position.
@@ -893,10 +801,10 @@ class App(Map):
         except Exception as e:
             uav_data = self.drone_service.get_uav(uav_index)
             if uav_data:
-                uav_data["status"]["connection_status"] = False
-                self.telemetry_controller.set_connection_display(uav_index, uav_data["status"])
+                uav_data.telemetry.connected = False
+                self.telemetry_controller.set_connection_display(uav_index, uav_data.telemetry)
             self.logger.log(f"Connection error to UAV {uav_index}: {repr(e)}", level="error")
-            self.popup_msg( # type: ignore
+            self.view.popup_msg( # type: ignore
                 f"Connection error to UAV {uav_index}: {repr(e)}",
                 src_msg="uav_connect_callback",
                 type_msg="error",
@@ -930,14 +838,14 @@ class App(Map):
             return
             
         try:
-            self.update_terminal(f"[INFO] Sent ARM command to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Sent ARM command to UAV {uav_index}")
             await self.drone_service.arm(uav_index)
             await asyncio.sleep(3)
             await self.uav_disarm_callback(uav_index)
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
-            self.drone_service.get_uav(uav_index)["status"]["arming_status"] = "DISARMED"
+            self.drone_service.get_uav(uav_index).telemetry.armed = "DISARMED"
             self.telemetry_controller._update_uav_info_display(uav_index)
             
             # Lấy thông báo lỗi chi tiết thay vì dùng repr(e)
@@ -946,7 +854,7 @@ class App(Map):
                 error_detail = f"{e._result.result_str} (Code: {e._result.result})"
                 
             self.logger.log(f"Arming error: {error_detail}", level="error")
-            self.popup_msg(f"Error: {error_detail}", src_msg="uav_arm_callback", type_msg="Error")
+            self.view.popup_msg(f"Error: {error_detail}", src_msg="uav_arm_callback", type_msg="Error")
 
     async def uav_disarm_callback(self, uav_index) -> None:
         """
@@ -975,13 +883,13 @@ class App(Map):
             return
             
         try:
-            self.update_terminal(f"[INFO] Sent DISARM command to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Sent DISARM command to UAV {uav_index}")
             await self.drone_service.disarm(uav_index)
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Disarming error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error: {repr(e)}", src_msg="uav_disarm_callback", type_msg="Error"
             )
 
@@ -1013,25 +921,25 @@ class App(Map):
             return
             
         try:
-            self.update_terminal(f"[INFO] Sent TAKEOFF command to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Sent TAKEOFF command to UAV {uav_index}")
             await self.drone_service.takeoff(uav_index)
             await self._save_initial_position(uav_index)
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Takeoff error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error: {repr(e)}", src_msg="uav_takeoff_callback", type_msg="Error"
             )
 
     async def _save_initial_position(self, uav_index):
         """Save the initial position of a UAV to a file."""
         # Update initial position from current position
-        self.UAVs[uav_index]["init_params"]["latitude"] = round(
-            self.UAVs[uav_index]["status"]["position_status"][0], 12
+        self.UAVs[uav_index].config.init_params["latitude"] = round(
+            self.UAVs[uav_index].telemetry.latitude, 12
         )
-        self.UAVs[uav_index]["init_params"]["longitude"] = round(
-            self.UAVs[uav_index]["status"]["position_status"][1], 12
+        self.UAVs[uav_index].config.init_params["longitude"] = round(
+            self.UAVs[uav_index].telemetry.longitude, 12
         )
         
         # Save to YAML file
@@ -1046,8 +954,8 @@ class App(Map):
             if uav_key not in data:
                 data[uav_key] = {}
                 
-            data[uav_key]["latitude"] = self.UAVs[uav_index]["init_params"]["latitude"]
-            data[uav_key]["longitude"] = self.UAVs[uav_index]["init_params"]["longitude"]
+            data[uav_key]["latitude"] = self.UAVs[uav_index].config.init_params["latitude"]
+            data[uav_key]["longitude"] = self.UAVs[uav_index].config.init_params["longitude"]
             
             with open(yaml_file, "w") as f:
                 yaml.dump(data, f, default_flow_style=False, sort_keys=False)
@@ -1081,13 +989,13 @@ class App(Map):
             return
             
         try:
-            self.update_terminal(f"[INFO] Sent LANDING command to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Sent LANDING command to UAV {uav_index}")
             await self.drone_service.land(uav_index)
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Landing error: {repr(e)}", level="error")
-            self.popup_msg(f"Error: {repr(e)}", src_msg="uav_land_callback", type_msg="Error")
+            self.view.popup_msg(f"Error: {repr(e)}", src_msg="uav_land_callback", type_msg="Error")
 
     async def uav_return_callback(self, uav_index, rtl=False) -> None:
         """
@@ -1118,18 +1026,18 @@ class App(Map):
             
         try:
             # Get position information
-            init_latitude = self.UAVs[uav_index]["init_params"]["latitude"]
-            init_longitude = self.UAVs[uav_index]["init_params"]["longitude"]
-            current_latitude = self.UAVs[uav_index]["status"]["position_status"][0]
-            current_longitude = self.UAVs[uav_index]["status"]["position_status"][1]
+            init_latitude = self.UAVs[uav_index].config.init_params["latitude"]
+            init_longitude = self.UAVs[uav_index].config.init_params["longitude"]
+            current_latitude = self.UAVs[uav_index].telemetry.latitude
+            current_longitude = self.UAVs[uav_index].telemetry.longitude
             
             if rtl:
                 # Return to launch (return and land)
-                self.update_terminal(f"[INFO] Sent RTL command to UAV {uav_index}")
+                self.view.update_terminal(f"[INFO] Sent RTL command to UAV {uav_index}")
                 
                 # If already at initial position, just land
                 if (init_latitude, init_longitude) == (current_latitude, current_longitude):
-                    self.update_terminal(
+                    self.view.update_terminal(
                         f"[INFO] UAV {uav_index} is already at the initial position, landing..."
                     )
                     await self.drone_service.land(uav_index)
@@ -1137,11 +1045,11 @@ class App(Map):
                     await self.drone_service.return_to_launch(uav_index)
             else:
                 # Return to initial position without landing
-                self.update_terminal(
+                self.view.update_terminal(
                     f"[INFO] Sent RETURN command to UAV {uav_index} to lat: {init_latitude} long: {init_longitude}"
                 )
                 await self.drone_service.goto_location(uav_index, init_latitude, init_longitude)
-                self.UAVs[uav_index]["status"]["mode_status"] = "RETURN" # goto_location sets a different mode
+                self.UAVs[uav_index].telemetry.flight_mode = "RETURN" # goto_location sets a different mode
             
             # Update display
             self.telemetry_controller._update_uav_info_display(uav_index)
@@ -1151,7 +1059,7 @@ class App(Map):
             
         except Exception as e:
             self.logger.log(f"Return error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error: {repr(e)}", src_msg="uav_return_callback", type_msg="Error"
             )
 
@@ -1189,18 +1097,12 @@ class App(Map):
         
         # Handle regular UAV mission
         if uav_index in avail_uav_indexes:
-            # await self._execute_standard_mission(uav_index)
             await asyncio.gather(
                 self._execute_standard_mission(uav_index),
-                # self.telemetry_controller.uav_fn_get_position(uav_index),
             )
         
         # Handle rescue UAV mission
         elif uav_index == self.config.RESCUE_UAV_INDEX:
-            # Check if this is first time or if rescue tab is selected
-            # if not (self.UAVs[RESCUE_UAV_INDEX]["rescue_first_time"] or 
-            #         (self.ui.tabWidget.currentIndex() == RESCUE_UAV_INDEX)):
-            #     return
             
             await self.uav_fn_rescue()
             
@@ -1212,7 +1114,7 @@ class App(Map):
             
         try:
             # Health check before mission
-            self.update_terminal(
+            self.view.update_terminal(
                 "Waiting for drone to have a global position estimate...", uav_index=uav_index
             )
             self.logger.log(f"UAV-{uav_index} -- Global position for estimate OK", level="info")
@@ -1223,16 +1125,16 @@ class App(Map):
                 os.remove(f)
             
             # Start new mission
-            self.update_terminal(f"[INFO] Sent MISSION command to UAV {uav_index}")
-            self.UAVs[uav_index]["status"]["on_mission"] = True
-            self.UAVs[uav_index]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if self.active_tab_index == uav_index:
+            self.view.update_terminal(f"[INFO] Sent MISSION command to UAV {uav_index}")
+            self.UAVs[uav_index].telemetry.on_mission = True
+            self.UAVs[uav_index].telemetry.mission_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
             
             if plan_file is None:
                 plan_file = f"{__current_path__}/logs/points/reduced_point{uav_index}.plan"
                 
-            self.update_terminal(f"[INFO] Bắt đầu nạp {plan_file} và tiến hành cất cánh...", uav_index=0)
+            self.view.update_terminal(f"[INFO] Bắt đầu nạp {plan_file} và tiến hành cất cánh...", uav_index=0)
             progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
 
             await self.drone_service.do_mission_and_wait(uav_index, plan_file)
@@ -1243,16 +1145,16 @@ class App(Map):
             self.telemetry_controller._update_uav_info_display(uav_index)
             
             # Check if mission is finished and initiate return if needed
-            if await self.drone_service.get_uav(uav_index)["system"].mission.is_mission_finished():
+            if await self.drone_service.get_uav(uav_index).system.mission.is_mission_finished():
                 clear_mission_logs(uav_index, save_dir=__current_path__)
                 
-            self.UAVs[uav_index]["status"]["on_mission"] = False
-            if self.active_tab_index == uav_index:
+            self.UAVs[uav_index].telemetry.on_mission = False
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Resume")
                 
         except Exception as e:
             self.logger.log(f"Mission error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error: {repr(e)}", src_msg="uav_mission_callback", type_msg="Error"
             )
             
@@ -1279,22 +1181,22 @@ class App(Map):
             push_tasks = []
             for i in avail_uav_indexes:
                 if self._check_uav_connection(i):
-                    self.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
+                    self.view.update_terminal(f"[INFO] Sent PUSH MISSION command to UAV {i}")
                     push_tasks.append(
                         self.drone_service.uav_fn_upload_mission(uav_index=i, mission_plan_file=mission_file)
                     )
-                    self.UAVs[i]["status"]["mode_status"] = "Mission uploaded"
+                    self.UAVs[i].telemetry.flight_mode = "Mission uploaded"
                     self.telemetry_controller._update_uav_info_display(i)
 
             if push_tasks:
                 asyncio.create_task(asyncio.gather(*push_tasks))
             else:
-                self.popup_msg("No connected UAVs to push mission to.", src_msg="Push Mission", type_msg="Warning")
+                self.view.popup_msg("No connected UAVs to push mission to.", src_msg="Push Mission", type_msg="Warning")
             return
             
         # Handle pushing mission to SINGLE UAV
         if not self._check_uav_connection(uav_index):
-            self.popup_msg(f"Please connect UAV {uav_index} first!", src_msg="Push Mission", type_msg="Warning")
+            self.view.popup_msg(f"Please connect UAV {uav_index} first!", src_msg="Push Mission", type_msg="Warning")
             return
 
         plans_log_dir = self.config.SRC_DIR / "logs" / "points"
@@ -1317,19 +1219,19 @@ class App(Map):
 
     async def _async_push_mission(self, uav_index, mission_file):
         try:
-            self.update_terminal(f"[INFO] Uploading mission from {mission_file} to UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Uploading mission from {mission_file} to UAV {uav_index}")
             await self.drone_service.uav_fn_upload_mission(uav_index=uav_index, mission_plan_file=mission_file)
             
             # 2. Ép con trỏ waypoint bắt đầu từ điểm xuất phát (index 0)
-            await self.UAVs[uav_index]["system"].mission.set_current_mission_item(0)
+            await self.UAVs[uav_index].system.mission.set_current_mission_item(0)
 
             # Update status
-            self.UAVs[uav_index]["status"]["mode_status"] = "Mission uploaded"
+            self.UAVs[uav_index].telemetry.flight_mode = "Mission uploaded"
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             logger.log(f"Mission push error: {repr(e)}", level="error")
-            self.popup_msg(f"Error pushing mission: {repr(e)}", src_msg="Push Mission", type_msg="Error")
+            self.view.popup_msg(f"Error pushing mission: {repr(e)}", src_msg="Push Mission", type_msg="Error")
 
     async def uav_toggle_pause_mission_callback(self, uav_index) -> None:
         """
@@ -1346,7 +1248,6 @@ class App(Map):
             None
         """
 
-        
         # Handle the case of toggling all UAVs
         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
             toggle_tasks = [
@@ -1361,19 +1262,19 @@ class App(Map):
             
         try:
             # Determine current mission state and toggle it
-            is_on_mission = self.UAVs[uav_index]["status"]["on_mission"]
+            is_on_mission = self.UAVs[uav_index].telemetry.on_mission
             
             if is_on_mission:
                 # Pause the mission
-                self.update_terminal(f"[INFO] Sent PAUSE MISSION command to UAV {uav_index}")
+                self.view.update_terminal(f"[INFO] Sent PAUSE MISSION command to UAV {uav_index}")
                 await self.drone_service.pause_mission(uav_index)
-                if self.active_tab_index == uav_index:
+                if self.view.active_tab_index == uav_index:
                     self._set_pause_button_style("Resume")
             else:
                 # Resume the mission
-                self.update_terminal(f"[INFO] Sent RESUME MISSION command to UAV {uav_index}")
+                self.view.update_terminal(f"[INFO] Sent RESUME MISSION command to UAV {uav_index}")
                 await self.drone_service.start_mission(uav_index)
-                if self.active_tab_index == uav_index:
+                if self.view.active_tab_index == uav_index:
                     self._set_pause_button_style("Pause")
             
             # Update display
@@ -1381,7 +1282,7 @@ class App(Map):
             
         except Exception as e:
             self.logger.log(f"Mission toggle error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error toggling mission: {repr(e)}",
                 src_msg="uav_toggle_pause_mission_callback",
                 type_msg="Error"
@@ -1406,7 +1307,7 @@ class App(Map):
         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
             toggle_tasks = [
                 self.uav_toggle_open_callback(i) for i in range(1, self.config.MAX_UAV_COUNT + 1)
-                if self.UAVs[i]["connection_allow"]
+                if self.UAVs[i].config.connection_allow
             ]
             await asyncio.gather(*toggle_tasks)
             return
@@ -1416,83 +1317,18 @@ class App(Map):
             return
             
         try:            
-            self.update_terminal(f"[INFO] Toggling actuator for UAV {uav_index}")
+            self.view.update_terminal(f"[INFO] Toggling actuator for UAV {uav_index}")
             await self.drone_service.toggle_actuator(uav_index)
             self.telemetry_controller._update_uav_info_display(uav_index)
             
         except Exception as e:
             self.logger.log(f"Actuator toggle error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error toggling actuator: {repr(e)}",
                 src_msg="uav_toggle_open_callback",
                 type_msg="Error"
             )
 
-#     def uav_toggle_camera_callback(self, uav_index) -> None:
-#         """
-#         Toggle camera streaming for a specific UAV or all UAVs.
-#         
-#         This method starts or stops the video streaming thread for the 
-#         specified UAV(s).
-#         
-#         Args:
-#             uav_index (int): The UAV to toggle camera (1-MAX_UAV_COUNT),
-#                             or 0 for all UAVs
-#             
-#         Returns:
-#             None
-#         """
-#         
-#         # Handle the case of toggling all UAVs
-#         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
-#             for i in range(1, self.config.MAX_UAV_COUNT + 1):
-#                 # Only toggle UAVs that are eligible for streaming
-#                 if self.stream_controller._can_stream(i):
-#                     self.stream_controller.uav_toggle_camera_callback(i)
-#             return
-#         
-#         # Skip if UAV is not eligible for streaming
-#         if not self.stream_controller._can_stream(uav_index):
-#             self.logger.log(
-#                 f"Camera toggle skipped for UAV {uav_index}: not eligible for streaming",
-#                 level="warning"
-#             )
-#             return
-#             
-#         try:
-#             # Determine current streaming state
-#             is_streaming = self.UAVs[uav_index]["status"]["streaming_status"]
-#             
-#             if not is_streaming:
-#                 # Start streaming
-#                 if self.uav_stream_threads[uav_index - 1] is None:
-#                     self.stream_controller._create_streaming_threads(uav_indexes=[uav_index])
-#                     
-#                 self.uav_stream_threads[uav_index - 1].start()
-#                 self.UAVs[uav_index]["status"]["streaming_status"] = True
-#                 
-#                 self.logger.log(f"UAV-{uav_index} streaming started", level="info")
-#                 self.ui.btn_toggle_camera.setStyleSheet("background-color: green")
-#             else:
-#                 # Stop streaming
-#                 self.uav_stream_threads[uav_index - 1].stop()
-#                 self.UAVs[uav_index]["status"]["streaming_status"] = False
-#                 
-#                 self.logger.log(f"UAV-{uav_index} streaming stopped", level="info")
-#                 self.ui.btn_toggle_camera.setStyleSheet("background-color: red")
-#             
-#             # Update thread status
-#             self.uav_stream_threads[uav_index - 1].isRunning = self.UAVs[uav_index]["status"][
-#                 "streaming_status"
-#             ]
-#             
-#         except Exception as e:
-#             self.logger.log(f"Camera toggle error: {repr(e)}", level="error")
-#             self.popup_msg(
-#                 f"Error toggling camera: {repr(e)}", 
-#                 src_msg="uav_toggle_camera_callback",
-#                 type_msg="Error"
-#             )
 
     async def uav_goto_callback(self, uav_index, page="settings", *args) -> None:
         
@@ -1502,7 +1338,7 @@ class App(Map):
             # Ensure coordinates are valid
             if longitude is None or latitude is None:
                 self.logger.log("Invalid coordinates for goto command", level="warning")
-                self.popup_msg(
+                self.view.popup_msg(
                     "Invalid coordinates for goto command",
                     src_msg="uav_goto_callback",
                     type_msg="Warning"
@@ -1518,7 +1354,7 @@ class App(Map):
                 if not self._check_uav_connection(uav_index):
                     return
                 # Send the command
-                self.update_terminal(
+                self.view.update_terminal(
                     f"[INFO] Sent GOTO command to UAV {uav_index}: lat={latitude}, lon={longitude}")
                 await self.drone_service.goto_location(uav_index, latitude, longitude)
                 self.telemetry_controller._update_uav_info_display(uav_index)
@@ -1527,7 +1363,7 @@ class App(Map):
                 goto_tasks = []
                 for i in range(1, self.config.MAX_UAV_COUNT + 1):
                     if self._check_uav_connection(i):
-                        self.update_terminal(
+                        self.view.update_terminal(
                             f"[INFO] Sent GOTO command to UAV {i}: lat={latitude}, lon={longitude}"
                         )
                         goto_tasks.append(self.drone_service.goto_location(i, latitude, longitude))
@@ -1538,7 +1374,7 @@ class App(Map):
                 
         except Exception as e:
             self.logger.log(f"Goto error: {repr(e)}", level="error")
-            self.popup_msg(
+            self.view.popup_msg(
                 f"Error in goto command: {repr(e)}",
                 src_msg="uav_goto_callback",
                 type_msg="Error"
@@ -1548,8 +1384,8 @@ class App(Map):
         """Get coordinates from the specified page with fallback to defaults."""
         
         # Set default coordinates (offset by UAV index to avoid collisions)
-        default_longitude = self.UAVs[uav_index]["init_params"]["longitude"] if uav_index > 0 else self.config.init_pos['uav_1']['longitude']
-        default_latitude = self.UAVs[uav_index]["init_params"]["latitude"] if uav_index > 0 else self.config.init_pos['uav_1']['latitude']
+        default_longitude = self.UAVs[uav_index].config.init_params["longitude"] if uav_index > 0 else self.config.init_pos['uav_1']['longitude']
+        default_latitude = self.UAVs[uav_index].config.init_params["latitude"] if uav_index > 0 else self.config.init_pos['uav_1']['latitude']
         
         # Get coordinates from the specified page
         if page == "settings":
@@ -1592,8 +1428,8 @@ class App(Map):
                 f.write(f"{latitude},{longitude}")
                 
             # Only log history when the UAV is on a mission
-            if self.UAVs[uav_index]["status"].get("on_mission", False):
-                mission_time = self.UAVs[uav_index]["status"].get("mission_start_time", datetime.now().strftime("%Y%m%d"))
+            if self.UAVs[uav_index].telemetry.on_mission:
+                mission_time = self.UAVs[uav_index].telemetry.mission_start_time if self.UAVs[uav_index].telemetry.mission_start_time else datetime.now().strftime("%Y%m%d")
                 history_file = position_file.replace(".txt", f"_history_{mission_time}.txt")
                 with open(history_file, "a") as f:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1602,81 +1438,8 @@ class App(Map):
         except Exception as e:
             self.logger.log(f"Failed to update position log for UAV {uav_index}: {e}", level="warning")
 
-#     def _update_uav_info_display(self, uav_index):
-#         """Update the information display for a UAV."""
-#         
-#         self.uav_information_views[uav_index - 1].setText(
-#             self.telemetry_controller.template_information(uav_index, **self.UAVs[uav_index]["status"])
-#         )
         
-#     def set_connection_display(self, uav_index, uav_status):
-#         """
-#         Updates the connection status of a UAV in the UI.
-# 
-#         Args:
-#             uav_index (int): The index of the UAV to update.
-#             status (bool): The connection status of the UAV.
-# 
-#         Returns:
-#             None
-#         """
-#         
-#         if uav_status["connection_status"]:
-#             self.uav_label_params[uav_index - 1].setStyleSheet("background-color: green")
-#         else:
-#             self.uav_label_params[uav_index - 1].setStyleSheet("background-color: red")
-# 
-#         self.uav_information_views[uav_index - 1].setText(
-#             self.telemetry_controller.template_information(uav_index, **uav_status)
-#         )
 
-    # --------------------------<UAVs get status functions>-----------------------------
-#     async def uav_fn_get_status(self, uav_index, verbose=1) -> None:
-#         """
-#         Retrieve and update all status information for a UAV or all UAVs.
-#         
-#         This function fetches and updates position, mode, battery, arm status, GPS info,
-#         and flight parameters for the specified UAV. It can also handle retrieving status
-#         for all UAVs when uav_index is out of range.
-#         
-#         Args:
-#             uav_index (int): The UAV to get status for (1-MAX_UAV_COUNT), or out of range for all UAVs
-#             verbose (int): If 1, also display status text messages in the terminal
-#             
-#         Returns:
-#             None
-#         """
-#         
-#         # Handle getting status for all UAVs
-#         if uav_index not in range(1, self.config.MAX_UAV_COUNT + 1):
-#             status_tasks = [
-#                 self.telemetry_controller.uav_fn_get_status(i, verbose=verbose) # type: ignore
-#                 for i in range(1, self.config.MAX_UAV_COUNT + 1)
-#                 if self.UAVs[i]["connection_allow"]
-#             ]
-#             await asyncio.gather(*status_tasks)
-#             return
-#         
-#         # Skip if UAV is not connected and not allowed
-#         if not (self.UAVs[uav_index]["status"]["connection_status"] and self.UAVs[uav_index]["connection_allow"]):
-#             return
-#         
-#         try:
-#             await self.drone_service.get_status(uav_index)
-#             self.telemetry_controller._update_uav_info_display(uav_index)
-#             await self.telemetry_controller.uav_fn_get_flight_info(uav_index, copy=False) # Keep UI-related param logic here
-#             if verbose:
-#                 await self.telemetry_controller.uav_fn_print_status(uav_index)
-#             
-#         except Exception as e:
-#             self.logger.log(f"Failed to get status for UAV {uav_index}: {e}", level="error")
-#             self.UAVs[uav_index]["status"]["connection_status"] = False
-#             self.telemetry_controller.set_connection_display(uav_index, self.UAVs[uav_index]["status"])
-#             self.popup_msg(
-#                 f"Error retrieving UAV {uav_index} status: {repr(e)}", 
-#                 src_msg="uav_fn_get_status", 
-#                 type_msg="error"
-#             )
 
     #SEND COORDINATE ham gui tin nhan
     async def send_coordinate(self) -> None:
@@ -1688,14 +1451,11 @@ class App(Map):
             time.sleep(2)
             self.ui.mainTerminal.appendPlainText("Connected to " + port)
 
-
             # Gui tin nhan
-
 
             phone_number = "0972368553"
             script_dir = os.path.dirname(os.path.abspath(__file__))
             log_file_path = os.path.join(script_dir, "logs", "detected_pos", "detection_pos_uav_1.log")
-
 
             try:
                 with open(log_file_path, "r", encoding="utf-8") as file:
@@ -1714,267 +1474,23 @@ class App(Map):
         except serial.SerialException as e:
             self.ui.mainTerminal.appendPlainText("Error: " + str(e))
 
-#     async def uav_fn_get_position(self, uav_index) -> None:
-#         """
-#         Retrieve and update position data for a UAV.
-#         """
-#         # This function is now just a wrapper for UI updates after the service gets the data.
-#         # The actual data fetching is in drone_service.get_status()
-#         await self.drone_service.get_status(uav_index)
-#         uav_data = self.drone_service.get_uav(uav_index)
-#         self._update_position_log(uav_index, uav_data["status"]["position_status"][0], uav_data["status"]["position_status"][1], uav_data["status"]["altitude_status"][1])
-#         self.telemetry_controller._update_uav_info_display(uav_index)
 
-#     async def uav_fn_get_mode(self, uav_index) -> None:
-#         """This logic is now in DroneService.get_status()"""
-#         pass
-#     async def uav_fn_get_battery(self, uav_index) -> None:
-#         """This logic is now in DroneService.get_status()"""
-#         pass
-#     async def uav_fn_get_arm_status(self, uav_index) -> None:
-#         """This logic is now in DroneService.get_status()"""
-#         pass
-#     async def uav_fn_get_gps(self, uav_index) -> None:
-#         """This logic is now in DroneService.get_status()"""
-#         pass
 
-#     async def uav_fn_get_flight_info(self, uav_index, copy=False) -> None:
-#         """
-#         Retrieve and update flight parameters for a UAV.
-#         
-#         This function gets the current flight parameters from the UAV and updates
-#         the parameter display fields in the UI. If 'copy' is True, it also copies 
-#         the values to the parameter input fields.
-#         
-#         Args:
-#             uav_index (int): The UAV to get parameters for (1-MAX_UAV_COUNT)
-#             copy (bool): If True, copy parameters to input fields
-#             
-#         Returns:
-#             None
-#         """
-#         
-#         try:
-#             # Get parameters from the service
-#             parameters = await self.drone_service.get_params(uav_index, self.config.interface['displayed_parameters'])
-#             
-#             # Update parameter display fields
-#             for i, (param_name, value) in enumerate(parameters.items()):
-#                 # Format the value to one decimal place
-#                 formatted_value = str(round(value, 1))
-#                 
-#                 # Update the display field
-#                 self.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
-#                 
-#                 # If requested, also copy to the input field
-#                 if copy:
-#                     self.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
-#                     
-#         except Exception as e:
-#             self.logger.log(f"Failed to get flight parameters for UAV {uav_index}: {e}", level="error")
-#             self.popup_msg(
-#                 f"Error retrieving flight parameters: {repr(e)}", 
-#                 src_msg="uav_fn_get_flight_info", 
-#                 type_msg="error"
-#             )
 
-#     async def uav_fn_set_flight_info(self, uav_index) -> None:
-#         """
-#         Set flight parameters for a UAV.
-#         
-#         This function gets parameter values from the input fields, validates them,
-#         and sends them to the UAV. It then refreshes the parameter display.
-#         
-#         Args:
-#             uav_index (int): The UAV to set parameters for (1-MAX_UAV_COUNT)
-#             
-#         Returns:
-#             None
-#         """
-#         
-#         try:
-#             # Initialize parameters dictionary
-#             parameters = {}
-#             
-#             # Get widgets containing current and new values
-#             input_widgets = self.uav_param_sets[uav_index - 1].children()[1:-1]
-#             display_widgets = self.uav_param_displays[uav_index - 1].children()[1:-1]
-#             
-#             # Populate parameters from input fields, falling back to current values if empty
-#             for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
-#                 param_name = self.config.interface['displayed_parameters'][i]
-#                 input_text = input_widget.text()
-#                 
-#                 if not input_text:
-#                     # Use current value if input is empty
-#                     parameters[param_name] = float(display_widget.text())
-#                 else:
-#                     try:
-#                         # Validate and convert input to float
-#                         parameters[param_name] = float(input_text)
-#                     except ValueError:
-#                         # Handle invalid input
-#                         self.logger.log(f"Invalid value for parameter {param_name}: {input_text}", level="warning")
-#                         self.popup_msg(
-#                             f"Invalid value for {param_name}: {input_text}", 
-#                             src_msg="uav_fn_set_flight_info", 
-#                             type_msg="Warning"
-#                         )
-#                         # Use current value instead
-#                         parameters[param_name] = float(display_widget.text())
-#             
-#             await self.drone_service.set_params(uav_index, parameters)
-#             
-#             # Refresh parameter display
-#             await self.telemetry_controller.uav_fn_get_flight_info(uav_index=uav_index, copy=False)
-#             
-#             # Log and display success message
-#             self.logger.log(f"Updated flight parameters for UAV {uav_index}", level="info")
-#             self.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
-#             
-#         except Exception as e:
-#             self.logger.log(f"Failed to set flight parameters for UAV {uav_index}: {e}", level="error")
-#             self.popup_msg(
-#                 f"Error setting flight parameters: {repr(e)}", 
-#                 src_msg="uav_fn_set_flight_info", 
-#                 type_msg="Error"
-#             )
 
-#     async def uav_fn_print_status(self, uav_index) -> None:
-#         """
-#         Display status text messages from a UAV in the terminal.
-#         
-#         Args:
-#             uav_index (int): The UAV to get status messages from (1-MAX_UAV_COUNT)
-#             
-#         Returns:
-#             None
-#         """
-#         
-#         # Skip if UAV is not connected or not allowed
-#         if not self._check_uav_connection(uav_index):
-#             return
-#         
-#         try:
-#             # Get and display status text messages
-#             async for status in self.drone_service.get_uav(uav_index)["system"].telemetry.status_text():
-#                 # Format the status message
-#                 status_text = f"> {status.type} - {status.text}"
-#                 
-#                 # Display in the terminal
-#                 self.update_terminal(status_text, uav_index)
-#                 
-#                 # Log to file based on severity
-#                 if status.type.name in ["ERROR", "CRITICAL"]:
-#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="error")
-#                 elif status.type.name == "WARNING":
-#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="warning")
-#                 else:
-#                     self.logger.log(f"UAV {uav_index}: {status.text}", level="debug")
-#                     
-#         except Exception as e:
-#             self.logger.log(f"Failed to print status for UAV {uav_index}: {e}", level="error")
 
-    # -----------------------------< UAVs streaming functions >-----------------------------
-#     @pyqtSlot(np.ndarray, list)
-#     def stream_on_uav_screen(self, annotated_frame=None, results=None) -> None:
-#         """
-#         Display video stream on the UAV screen with optional object detection annotations.
-#         
-#         This method processes video frames for display in the UAV interface. It handles raw 
-#         or annotated frames with detection results, manages frame rate throttling, and exports 
-#         detection data when targets are found.
-#         
-#         Args:
-#             frame (np.ndarray): The original video frame without annotations
-#             annotated_frame (np.ndarray): The frame with detection annotations
-#             results (list): Contains [uav_index, current_fps, detected_results] where:
-#                             - uav_index: The UAV identifier
-#                             - current_fps: Current frames per second
-#                             - detected_results: Detection results including track IDs and object data
-#         
-#         Returns:
-#             None
-# 
-#         Notes:
-#             - The method only processes frames if UAV connection is allowed and streaming is enabled
-#             - Frame rate is limited according to DEFAULT_STREAM_FPS
-#             - When detection is enabled and a person is detected, the frame is saved and GPS coordinates
-#             are exported to logs
-#         """
-# 
-#         if not results:
-#             self.logger.log("Received empty results in stream handler", level="warning")
-#             return
-#             
-#         # Unpack the results
-#         uav_index, current_fps, detected_results = results
-#         uav_index = int(uav_index)
-#         
-#         # Skip processing if UAV is not eligible for streaming
-#         if not self.stream_controller._can_stream(uav_index):
-#             return
-#             
-#         try:
-#             # Apply frame rate limiting
-#             if not self.stream_controller._should_process_frame(uav_index, current_fps):
-#                 return
-#                 
-#             # Select the appropriate frame to display
-#             streaming_frame = annotated_frame
-#             
-#             # Display the frame
-#             asyncio.create_task(self.update_uav_screen_view(
-#                 uav_index, streaming_frame, screen_name=self.config.stream['display']['default_screen']
-#             ))
-#             
-#             # Process detection results if available and detection is enabled
-#             if self.UAVs[uav_index]["detection_enable"] and detected_results:
-#                 asyncio.create_task(self._process_detection_results(uav_index, annotated_frame, detected_results))
-# 
-#                 
-#         except Exception as e:
-#             # Update status and show error message
-#             self.UAVs[uav_index]["status"]["streaming_status"] = False
-#             self.logger.log(f"Stream display error for UAV {uav_index}: {repr(e)}", level="error")
-#             self.popup_msg(
-#                 f"Stream display error: {repr(e)}",
-#                 src_msg="stream_on_uav_screen",
-#                 type_msg="error",
-#             )
-            
             
     def _check_uav_connection(self, uav_index, strictly=True):
         """Check if a UAV is connected and allowed to receive commands."""
         if strictly:
-            return (self.UAVs[uav_index]["status"]["connection_status"] and 
-                    self.UAVs[uav_index]["connection_allow"])
+            return (self.UAVs[uav_index].telemetry.connected and 
+                    self.UAVs[uav_index].config.connection_allow)
         else:
-            return (self.UAVs[uav_index]["status"]["connection_status"] or
-                    self.UAVs[uav_index]["connection_allow"])
+            return (self.UAVs[uav_index].telemetry.connected or
+                    self.UAVs[uav_index].config.connection_allow)
             
-#     def _can_stream(self, uav_index):
-#         """Check if UAV is eligible for stream display."""
-#         return (
-#             self._check_uav_connection(uav_index=uav_index, strictly=False) and 
-#             self.UAVs[uav_index]["streaming_enable"]
-#         )
 
-#     def _should_process_frame(self, uav_index, current_fps):
-#         """Apply frame rate limiting to avoid overloading the UI."""
-#         # Calculate the frame skip rate to achieve target FPS
-#         max_frame_cnt = max(1, current_fps // self.config.stream['source']['default_fps'])
-#         
-#         # Increment the frame counter for this UAV
-#         self.uav_stream_frame_cnt[uav_index - 1] += 1
-#         
-#         # Process frame if it's time to display based on our rate limiting
-#         return self.uav_stream_frame_cnt[uav_index - 1] % max_frame_cnt == 0
 
-#     def _select_frame_type(self, uav_index, frame, annotated_frame):
-#         """Select which frame to display based on detection settings."""
-#         # Use annotated frame if detection is enabled, otherwise use raw frame
-#         return annotated_frame if self.UAVs[uav_index]["detection_enable"] else frame
 
     async def _process_detection_results(self, uav_index, annotated_frame, detected_results):
         """Process object detection results and handle detected targets."""
@@ -1990,10 +1506,9 @@ class App(Map):
                 continue
             # Disable detection feature after finding a target
             await self.drone_service.pause_mission(uav_index)
-            #await self.drone_service.get_uav(uav_index)["system"].action.hold()
-            self.UAVs[uav_index]["detection_enable"] = False 
-            self.UAVs[uav_index]["status"]["on_mission"] = False
-            if self.active_tab_index == uav_index:
+            self.UAVs[uav_index].config.detection_enabled = False 
+            self.UAVs[uav_index].telemetry.on_mission = False
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Resume")
 
             # Get UAV position and frame information
@@ -2005,8 +1520,8 @@ class App(Map):
             #     gps_data = f.read()
             #     uav_lat, uav_long = map(float, gps_data.split(","))
                 
-            uav_lat, uav_long = self.UAVs[uav_index]["status"]["position_status"]
-            uav_alt = self.UAVs[uav_index]["status"]["altitude_status"][0]
+            uav_lat, uav_long = self.UAVs[uav_index].telemetry.latitude, self.UAVs[uav_index].telemetry.longitude
+            uav_alt = self.UAVs[uav_index].telemetry.altitude_relative_m
             uav_gps = [uav_lat, uav_long, uav_alt]
 
             # Export detection to GPS log
@@ -2024,13 +1539,12 @@ class App(Map):
 
             await asyncio.sleep(1)
             await self.drone_service.start_mission(uav_index)
-            self.UAVs[uav_index]["status"]["on_mission"] = True
-            if self.active_tab_index == uav_index:
+            self.UAVs[uav_index].telemetry.on_mission = True
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
             await asyncio.sleep(25)
-            self.UAVs[uav_index]["detection_enable"] = True
+            self.UAVs[uav_index].config.detection_enabled = True
 
-            
             # Only process the first detected person
             break
 
@@ -2049,7 +1563,7 @@ class App(Map):
             f"detected {class_name} at X: {detected_pos[0]:.1f} Y: {detected_pos[1]:.1f} "
             f"with frame size: {frame_shape[1]}x{frame_shape[0]}"
         )
-        self.update_terminal(detection_msg, 0)
+        self.view.update_terminal(detection_msg, 0)
         self.logger.log(detection_msg, level="info")
 
     async def monitor_mission_progress(self, uav_index):
@@ -2074,7 +1588,7 @@ class App(Map):
             
             while True:
                 try:
-                    async for progress in self.drone_service.get_uav(uav_index)["system"].mission.mission_progress():
+                    async for progress in self.drone_service.get_uav(uav_index).system.mission.mission_progress():
                         current = progress.current
                         total = progress.total
                         if total > 0:
@@ -2119,14 +1633,14 @@ class App(Map):
 
         # Kiểm tra kết nối UAV 1 ngay từ đầu trước khi tính toán
         if not self._check_uav_connection(1, strictly=True):
-            self.update_terminal("[SIM] UAV 1 is not connected. Simulation aborted.", 0)
-            self.popup_msg("Vui lòng Connect UAV 1 trước khi chạy Simulation!", "Simulation", "Warning")
+            self.view.update_terminal("[SIM] UAV 1 is not connected. Simulation aborted.", 0)
+            self.view.popup_msg("Vui lòng Connect UAV 1 trước khi chạy Simulation!", "Simulation", "Warning")
             return
 
-        self.update_terminal("[SIM] Starting simulation...", 0)
+        self.view.update_terminal("[SIM] Starting simulation...", 0)
 
         # 1. Clear previous results
-        self.sim_map.runScript("""
+        self.view.sim_map.runScript("""
             if (typeof map !== 'undefined') {
                 map.eachLayer(function (layer) {
                     if (layer instanceof L.Marker || layer instanceof L.Polygon || layer instanceof L.Polyline) {
@@ -2165,7 +1679,7 @@ class App(Map):
         reduce_points_enabled = self.ui.Reduce_Points.isChecked()
 
         if not selected_algos:
-            self.popup_msg("Please select at least one algorithm.", "Simulation", "Warning")
+            self.view.popup_msg("Please select at least one algorithm.", "Simulation", "Warning")
             return
 
         total_runs = len(selected_algos) * num_runs
@@ -2180,14 +1694,14 @@ class App(Map):
         # Lấy vị trí HIỆN TẠI của UAV 1 làm trung tâm và điểm xuất phát
         # thay vì vị trí khởi tạo trong config.
         await self.telemetry_controller.uav_fn_get_position(1)
-        start_lat = self.UAVs[1]["status"]["position_status"][0]
-        start_lon = self.UAVs[1]["status"]["position_status"][1]
+        start_lat = self.UAVs[1].telemetry.latitude
+        start_lon = self.UAVs[1].telemetry.longitude
 
         # Fallback to init_params if current position is not available
         if not isinstance(start_lat, (int, float)) or not isinstance(start_lon, (int, float)):
-            self.popup_msg("Không lấy được vị trí hiện tại của UAV 1. Sử dụng vị trí khởi tạo.", "Simulation", "Warning")
-            start_lat = self.UAVs[1]["init_params"]["latitude"]
-            start_lon = self.UAVs[1]["init_params"]["longitude"]
+            self.view.popup_msg("Không lấy được vị trí hiện tại của UAV 1. Sử dụng vị trí khởi tạo.", "Simulation", "Warning")
+            start_lat = self.UAVs[1].config.init_params["latitude"]
+            start_lon = self.UAVs[1].config.init_params["longitude"]
 
         start_coord = (start_lat, start_lon)
         center_lat, center_lon = start_coord
@@ -2195,7 +1709,7 @@ class App(Map):
         # 3. Generate mission area (polygon)
         try:
             # Focus bản đồ mô phỏng vào khu vực này
-            self.sim_map.setZoom(18)
+            self.view.sim_map.setZoom(18)
 
             if map_type == "Square":
                 side = self.ui.spinBox_5.value()
@@ -2229,14 +1743,14 @@ class App(Map):
                     (half_w, -half_h), (-half_w, -half_h)
                 ]
             elif map_type == "Custom":
-                custom_polygons = self.geodata.get("Polygon", [])
+                custom_polygons = self.view.geodata.get("Polygon", [])
                 if not custom_polygons:
-                    self.popup_msg(
+                    self.view.popup_msg(
                         "Vui lòng vẽ một vùng Custom trên Rescue Map trước khi chạy Simulation.",
                         "Simulation",
                         "Warning",
                     )
-                    self.update_terminal("[SIM] Simulation aborted: No custom polygon selected.", 0)
+                    self.view.update_terminal("[SIM] Simulation aborted: No custom polygon selected.", 0)
                     return
 
                 polygon_vertices = [
@@ -2244,8 +1758,8 @@ class App(Map):
                     for lat, lon in custom_polygons[-1]
                 ]
                 if len(polygon_vertices) < 3:
-                    self.popup_msg("Vùng Custom cần ít nhất 3 điểm.", "Simulation", "Warning")
-                    self.update_terminal("[SIM] Simulation aborted: Invalid custom polygon.", 0)
+                    self.view.popup_msg("Vùng Custom cần ít nhất 3 điểm.", "Simulation", "Warning")
+                    self.view.update_terminal("[SIM] Simulation aborted: Invalid custom polygon.", 0)
                     return
 
                 polygon_points_for_center = (
@@ -2261,16 +1775,16 @@ class App(Map):
 
                 xy_polygon_for_calc = convert_to_cartesian(polygon_vertices)
             else:
-                self.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
+                self.view.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
                 return
 
-            self.sim_map.centerAt(center_lat, center_lon)
+            self.view.sim_map.centerAt(center_lat, center_lon)
 
             # Vẽ vùng bay lên bản đồ sim
-            self.sim_map.drawPolygon("sim_area", polygon_vertices, options={'color': 'blue', 'fillOpacity': 0.1})
+            self.view.sim_map.drawPolygon("sim_area", polygon_vertices, options={'color': 'blue', 'fillOpacity': 0.1})
 
             # VẼ LẠI DRONE LÊN BẢN ĐỒ SIMULATION SAU KHI BỊ XÓA
-            self.update_drone_positions()
+            self.view.update_drone_positions()
 
             # 4. Generate grid points
             # Use the center of the area as the reference for coordinate conversions
@@ -2290,17 +1804,17 @@ class App(Map):
             grid_points_latlon = [calculate_new_lat_lon(ref_lat, ref_lon, p[1], p[0]) for p in grid_points_cartesian]
 
             if not grid_points_latlon or len(grid_points_latlon) < 2:
-                self.popup_msg("Vùng sinh quá bé hoặc Grid Size quá lớn, không đủ tạo điểm bay!", "Simulation", "Warning")
-                self.update_terminal("[SIM] Simulation aborted: Not enough points.", 0)
+                self.view.popup_msg("Vùng sinh quá bé hoặc Grid Size quá lớn, không đủ tạo điểm bay!", "Simulation", "Warning")
+                self.view.update_terminal("[SIM] Simulation aborted: Not enough points.", 0)
                 return
 
         except Exception as e:
-            self.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
+            self.view.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
             self.logger.error(f"[SIM] Error generating map/grid: {e}")
             return
 
         # 5. Run algorithms and display results
-        self.update_terminal(f"[SIM] Running {len(selected_algos)} algorithms, {num_runs} runs each...", 0)
+        self.view.update_terminal(f"[SIM] Running {len(selected_algos)} algorithms, {num_runs} runs each...", 0)
         await asyncio.sleep(0) # Nhường quyền cho event loop in log ra màn hình trước
 
         algo_map = {
@@ -2331,7 +1845,7 @@ class App(Map):
         best_overall_algo = ""
 
         # Lấy cao độ mặc định và tọa độ ban đầu của UAV 1
-        uav_alt = self.UAVs[1]["init_params"].get("altitude", 10.0)
+        uav_alt = self.UAVs[1].config.init_params.get("altitude", 10.0)
 
         for algo_name in selected_algos:
             if algo_name not in algo_map:
@@ -2345,13 +1859,13 @@ class App(Map):
 
             try:
                 for run_idx in range(num_runs): # type: ignore
-                    self.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
+                    self.view.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
                     await asyncio.sleep(0)
 
                     # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC
                     path = algo_map[algo_name](grid_points_latlon.copy(), start_coord)
                     if not path:
-                        self.update_terminal(f"[SIM] Thuật toán {algo_name} không trả về đường đi. Bỏ qua.", 0)
+                        self.view.update_terminal(f"[SIM] Thuật toán {algo_name} không trả về đường đi. Bỏ qua.", 0)
                         current_run += num_runs # Bỏ qua tất cả các lần chạy của thuật toán này
                         self.ui.progressBar.setValue(current_run)
                         self.ui.label_32.setText(f"{current_run}/{total_runs}")
@@ -2366,7 +1880,7 @@ class App(Map):
                         original_point_count = len(path)
                         path = reduce_path_collinear(path)
                         reduced_point_count = len(path)
-                        self.update_terminal(f"[SIM] Reduced path for {algo_name} from {original_point_count} to {reduced_point_count} waypoints.", 0)
+                        self.view.update_terminal(f"[SIM] Reduced path for {algo_name} from {original_point_count} to {reduced_point_count} waypoints.", 0)
 
                     # Chuyển đổi đường đi (lat, lon) sang (x, y) để tính toán
                     ref_lat, ref_lon = start_coord
@@ -2396,9 +1910,9 @@ class App(Map):
 
                     # --- DRAWING CURRENT PATH (MARKERS & POLYLINE) BEFORE SIM ---
                     # Clear previous temporary path drawings (orange polyline)
-                    self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
+                    self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
                     # Clear any existing temporary markers (e.g., from a previous run)
-                    self.sim_map.runScript("""
+                    self.view.sim_map.runScript("""
                         if (typeof map !== 'undefined') {
                             map.eachLayer(function (layer) {
                                 if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
@@ -2416,10 +1930,10 @@ class App(Map):
                             'title': f'Point {i+1}',
                             'name': 'sim_current_pt_' # Add a custom name for easier clearing
                         }
-                        self.sim_map.addMarker(f"sim_current_pt_{i+1}", p[0], p[1], **marker_options)
+                        self.view.sim_map.addMarker(f"sim_current_pt_{i+1}", p[0], p[1], **marker_options)
 
                     # Draw current path polyline (blue to distinguish from orange temp line)
-                    self.sim_map.drawPolyLine("current_run_path_polyline", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.7})
+                    self.view.sim_map.drawPolyLine("current_run_path_polyline", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.7})
                     # 2. XUẤT TỌA ĐỘ RA FILE
                     sim_plan_file = os.path.join(__current_path__, "logs", "points", "simulation_path.txt")
                     os.makedirs(os.path.dirname(sim_plan_file), exist_ok=True)
@@ -2430,13 +1944,13 @@ class App(Map):
                     # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
                     # Ghi nhận thời gian và pin trước khi cất cánh
                     start_time = time.time()
-                    batt_str = self.UAVs[1]["status"].get("battery_status", "100%")
+                    batt_str = self.UAVs[1].telemetry.battery_percent
                     start_battery = float(batt_str.replace('%', '')) if '%' in batt_str else 100.0
                     # Kích hoạt chuyến bay khép kín (đợi cho tới khi nó hạ cánh hẳn mới đi tiếp)
                     await self._run_single_sim_flight(1, sim_plan_file)
                     # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
-                    self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
-                    self.sim_map.runScript("""
+                    self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
+                    self.view.sim_map.runScript("""
                         if (typeof map !== 'undefined') {
                             map.eachLayer(function (layer) {
                                 if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
@@ -2447,7 +1961,7 @@ class App(Map):
                     """)
                     # Ghi nhận thời gian và pin sau khi hạ cánh
                     end_time = time.time()
-                    batt_str = self.UAVs[1]["status"].get("battery_status", "100%")
+                    batt_str = self.UAVs[1].telemetry.battery_percent
                     end_battery = float(batt_str.replace('%', '')) if '%' in batt_str else start_battery
                     flight_time = end_time - start_time
                     # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
@@ -2455,14 +1969,14 @@ class App(Map):
                     battery_drop = (flight_time * 0.15) + (turns * 0.05)
                     total_flight_time += flight_time
                     total_battery_drop += battery_drop
-                    self.update_terminal(f"[SIM] Kết quả lượt {run_idx+1}: Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%", 0)
+                    self.view.update_terminal(f"[SIM] Kết quả lượt {run_idx+1}: Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%", 0)
                     # 4. CẬP NHẬT GIAO DIỆN
                     current_run += 1
                     self.ui.progressBar.setValue(current_run)
                     self.ui.label_32.setText(f"{current_run}/{total_runs}")
                     await asyncio.sleep(0)
                     if current_run < total_runs:
-                        self.update_terminal("[SIM] Đợi 5 giây làm nguội trước khi cất cánh lượt tiếp theo...", 0)
+                        self.view.update_terminal("[SIM] Đợi 5 giây làm nguội trước khi cất cánh lượt tiếp theo...", 0)
                         await asyncio.sleep(5)
 
                 # 5. TÍNH TRUNG BÌNH & ĐIỀN VÀO BẢNG TỔNG KẾT
@@ -2495,17 +2009,17 @@ class App(Map):
                             best_overall_algo = algo_name
                             best_overall_path = current_best_path_for_algo
             except Exception as e:
-                self.update_terminal(f"[SIM] Lỗi thuật toán {algo_name}: {e}", 0)
+                self.view.update_terminal(f"[SIM] Lỗi thuật toán {algo_name}: {e}", 0)
                 self.logger.error(f"[SIM] Error in algorithm {algo_name}: {e}")
                 continue
 
         # 6. HOÀN TẤT & VẼ KẾT QUẢ TỐT NHẤT LÊN BẢN ĐỒ
         # Xoá đường màu cam nhạt để vẽ đường chính thức (đường tạm thời trước đây)
-        self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
+        self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
         
         # Clear all temporary markers and polylines that might still be present
-        self.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
-        self.sim_map.runScript("""
+        self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
+        self.view.sim_map.runScript("""
             if (typeof map !== 'undefined') {
                 map.eachLayer(function (layer) {
                     if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
@@ -2524,15 +2038,15 @@ class App(Map):
                     'title': f'Point {i}',
                     'name': 'sim_best_pt_' # Add a unique name for final best path markers
                 }
-                self.sim_map.addMarker(f"sim_best_pt_{i}", p[0], p[1], **marker_options)
+                self.view.sim_map.addMarker(f"sim_best_pt_{i}", p[0], p[1], **marker_options)
 
-            self.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5, 'name': 'best_path_polyline'})
-            self.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
-            self.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
+            self.view.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5, 'name': 'best_path_polyline'})
+            self.view.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
+            self.view.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
 
             # --- THÊM VÀO ĐỂ LƯU VÀ MỞ ẢNH KẾT QUẢ ---
             try:
-                self.update_terminal("[SIM] Generating and saving coverage analysis image...", 0)
+                self.view.update_terminal("[SIM] Generating and saving coverage analysis image...", 0)
                 final_analyzer = UAVAnalyzer(
                     area_gps=polygon_vertices,
                     flight_path=best_overall_path,
@@ -2549,7 +2063,7 @@ class App(Map):
                     save_path=image_path,
                     show=False  # Không hiển thị cửa sổ matplotlib
                 )
-                self.update_terminal(f"[SIM] Saved analysis image to {os.path.relpath(image_path)}", 0)
+                self.view.update_terminal(f"[SIM] Saved analysis image to {os.path.relpath(image_path)}", 0)
                 # Tự động mở file ảnh
                 if sys.platform == "win32":
                     os.startfile(image_path)
@@ -2558,16 +2072,16 @@ class App(Map):
                     subprocess.run([opener, image_path])
             except Exception as e:
                 self.logger.error(f"[SIM] Failed to generate or open analysis image: {e}")
-                self.update_terminal(f"[SIM] Error generating analysis image: {e}", 0)
+                self.view.update_terminal(f"[SIM] Error generating analysis image: {e}", 0)
             # --- KẾT THÚC PHẦN THÊM VÀO ---
 
-            self.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
+            self.view.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
         else:
-            self.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
+            self.view.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
     async def _run_single_sim_flight(self, uav_index, plan_file):
         try:
-            self.UAVs[uav_index]["status"]["on_mission"] = True
-            if self.active_tab_index == uav_index:
+            self.UAVs[uav_index].telemetry.on_mission = True
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
                 
             # Khởi chạy progress bar bay
@@ -2575,11 +2089,11 @@ class App(Map):
             
             # Task ngầm: Liên tục kiểm tra xem bay hết điểm chưa để bắn lệnh về
             async def auto_rtl_when_finished():
-                while self.UAVs[uav_index]["status"].get("on_mission", False):
+                while self.UAVs[uav_index].telemetry.on_mission:
                     try:
-                        if await self.UAVs[uav_index]["system"].mission.is_mission_finished():
-                            self.update_terminal(f"[SIM] UAV {uav_index} hoàn tất các điểm, đang tự động quay về (RTL)...", 0)
-                            await self.UAVs[uav_index]["system"].action.return_to_launch()
+                        if await self.UAVs[uav_index].system.mission.is_mission_finished():
+                            self.view.update_terminal(f"[SIM] UAV {uav_index} hoàn tất các điểm, đang tự động quay về (RTL)...", 0)
+                            await self.UAVs[uav_index].system.action.return_to_launch()
                             break
                     except Exception:
                         pass
@@ -2588,7 +2102,7 @@ class App(Map):
             rtl_task = asyncio.create_task(auto_rtl_when_finished())
             
             # Kích hoạt hàm cất cánh và bay (hàm uav_fn_do_mission sẽ tự động block cho đến khi UAV đáp đất hoàn toàn)
-            self.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
+            self.view.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
             await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
             
             # Hủy các task ngầm khi chuyến bay đã kết thúc và đợi chúng cleanup.
@@ -2599,16 +2113,16 @@ class App(Map):
             await asyncio.gather(*background_tasks, return_exceptions=True)
             
             # Khôi phục nút UI
-            self.UAVs[uav_index]["status"]["on_mission"] = False
-            if self.active_tab_index == uav_index:
+            self.UAVs[uav_index].telemetry.on_mission = False
+            if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Resume")
                 
             # QUAN TRỌNG: Đợi UAV xả động cơ (Disarm) hoàn toàn để reset hệ thống trước vòng lặp sau
-            self.update_terminal(f"[SIM] Đợi UAV {uav_index} xả động cơ (Disarm) an toàn...", 0)
+            self.view.update_terminal(f"[SIM] Đợi UAV {uav_index} xả động cơ (Disarm) an toàn...", 0)
             while True:
                 is_armed = False
                 try:
-                    async for armed in self.UAVs[uav_index]["system"].telemetry.armed():
+                    async for armed in self.UAVs[uav_index].system.telemetry.armed():
                         is_armed = armed
                         break
                 except Exception:
@@ -2618,50 +2132,25 @@ class App(Map):
                 await asyncio.sleep(1)
                 
         except Exception as e:
-            self.update_terminal(f"[SIM] Lỗi trong chuyến bay: {e}", 0)
+            self.view.update_terminal(f"[SIM] Lỗi trong chuyến bay: {e}", 0)
             raise e
         
-    # async def _run_sim_uav_mission(self, uav_index, plan_file):
-    #     """
-    #     Tiến trình ngầm thực thi mission cho UAV trên tab Simulation.
-    #     Gồm các bước: Upload -> Arm -> Takeoff -> Start Mission.
-    #     """
-    #     try:
-    #         self.UAVs[uav_index]["status"]["on_mission"] = True
-    #         if self.active_tab_index == uav_index:
-    #             self._set_pause_button_style("Pause")
-                
-    #         # Chạy hàm mission chuẩn (đã bao gồm cất cánh và làm nhiệm vụ)
-    #         await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
-            
-    #         # Kiểm tra nếu hoàn thành thì RTL (Quay về)
-    #         if await self.UAVs[uav_index]["system"].mission.is_mission_finished():
-    #             self.update_terminal(f"[SIM] UAV {uav_index} finished mission. Returning to launch.", 0)
-    #             await self.UAVs[uav_index]["system"].action.return_to_launch()
-                
-    #         self.UAVs[uav_index]["status"]["on_mission"] = False
-    #         if self.active_tab_index == uav_index:
-    #             self._set_pause_button_style("Resume")
-    #     except Exception as e:
-    #         self.logger.error(f"[SIM] Error executing flight simulation: {e}")
-    #         self.update_terminal(f"[SIM] Error executing flight simulation: {e}", 0)
-
     # ------------------------------------< Rescue UAV 6 >-----------------------------
     # ? developing ...
     async def uav_fn_rescue(self) -> None:
         if not ( # type: ignore
-            self.UAVs[self.config.RESCUE_UAV_INDEX]["status"]["connection_status"]
-            and self.UAVs[self.config.RESCUE_UAV_INDEX]["connection_allow"]
+            self.UAVs[self.config.RESCUE_UAV_INDEX].telemetry.connected
+            and self.UAVs[self.config.RESCUE_UAV_INDEX].config.connection_allow
         ):
             return
 
-        self.update_terminal(f"[INFO] Sent RESCUE command to UAV {self.config.RESCUE_UAV_INDEX}")
+        self.view.update_terminal(f"[INFO] Sent RESCUE command to UAV {self.config.RESCUE_UAV_INDEX}")
 
         await self.drone_service.connect(self.config.RESCUE_UAV_INDEX)
 
         # check health 
         # TODO: check battery level here
-        async for health in self.drone_service.get_uav(self.config.RESCUE_UAV_INDEX)["system"].telemetry.health():
+        async for health in self.drone_service.get_uav(self.config.RESCUE_UAV_INDEX).system.telemetry.health():
             if health.is_global_position_ok and health.is_home_position_ok: # type: ignore
                 self.logger.log(
                     f"UAV-{RESCUE_UAV_INDEX} -- Global position for estimate OK", level="info"
@@ -2683,9 +2172,6 @@ class App(Map):
                 )
 
                 if len(rescue_filepaths) == 0:
-                    # self.logger.log(
-                    #     f"No rescue position found, re-check rescue directory...", level="info"
-                    # )
                     await asyncio.sleep(1)
                     continue
 
@@ -2721,30 +2207,24 @@ class App(Map):
                 )
 
                 # get initial position
-                async for position in self.UAVs[RESCUE_UAV_INDEX]["system"].telemetry.position():
-                    self.UAVs[RESCUE_UAV_INDEX]["init_params"]["latitude"] = round(position.latitude_deg, 12)
-                    self.UAVs[RESCUE_UAV_INDEX]["init_params"]["longitude"] = round(position.longitude_deg, 12)
+                async for position in self.UAVs[RESCUE_UAV_INDEX].system.telemetry.position():
+                    self.UAVs[RESCUE_UAV_INDEX].config.init_params["latitude"] = round(position.latitude_deg, 12)
+                    self.UAVs[RESCUE_UAV_INDEX].config.init_params["longitude"] = round(position.longitude_deg, 12)
                     break
                 
                 # 2 UAV Rescue do the rescue mission and the detected drones goes into suspend mode
-                self.UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = True
-                self.UAVs[RESCUE_UAV_INDEX]["status"]["mission_start_time"] = datetime.now().strftime("%Y%m%d_%H%M%S") # type: ignore
-                if self.active_tab_index == RESCUE_UAV_INDEX:
+                self.UAVs[RESCUE_UAV_INDEX].telemetry.on_mission = True
+                self.UAVs[RESCUE_UAV_INDEX].telemetry.mission_start_time = datetime.now().strftime("%Y%m%d_%H%M%S") # type: ignore
+                if self.view.active_tab_index == RESCUE_UAV_INDEX:
                     self._set_pause_button_style("Pause")
                 await asyncio.gather(
                     #uav_suspend_missions(drones=detected_uav_list, suspend_time=30),
                     uav_rescue_process(self.UAVs[RESCUE_UAV_INDEX], rescue_filepath, self)
-                    # uav_rescue_process(
-                    #     drone=self.UAVs[RESCUE_UAV_INDEX], rescue_filepath=rescue_filepath, self
-                    # ),
-                    # uav_rescue_process(
-                    #     drone=self.UAVs[RESCUE_UAV_INDEX], rescue_filepath=rescue_filepath
-                    # ),
                 )
-                self.UAVs[RESCUE_UAV_INDEX]["status"]["on_mission"] = False
-                if self.active_tab_index == RESCUE_UAV_INDEX:
+                self.UAVs[RESCUE_UAV_INDEX].telemetry.on_mission = False
+                if self.view.active_tab_index == RESCUE_UAV_INDEX:
                     self._set_pause_button_style("Resume")
-                self.UAVs[RESCUE_UAV_INDEX]["rescue_first_time"] = False
+                self.UAVs[RESCUE_UAV_INDEX].rescue_first_time = False
                 await asyncio.sleep(15)
                 
                 # 3 remove the rescue file
@@ -2752,17 +2232,12 @@ class App(Map):
                     os.remove(rescue_filepath)  # remove the rescue file
                     self.logger.log(f"Rescue file {rescue_filepath} removed", level="info")
                 
-                # 4 remove the detected UAVs from the list
-                # self.detected_uav_list.remove(uav_index)
-                # self.detected_uav_list = []
                 break  # remove this line if you want to do the rescue mission continuously
 
             self.logger.log(f"Rescue mission completed", level="info")
-            # start rescue mission again
-            #await self.uav_fn_rescue()
         except Exception as e:
             self.logger.log(f"Error: {repr(e)}", level="error")
-            self.popup_msg(f"Error: {repr(e)}", src_msg="uav_fn_rescue", type_msg="Error")
+            self.view.popup_msg(f"Error: {repr(e)}", src_msg="uav_fn_rescue", type_msg="Error")
 
 # ------------------------------------< Main Application Class >-----------------------------
 def run():
@@ -2770,7 +2245,7 @@ def run():
     app.setStyle("Oxygen")  # ['Breeze', 'Oxygen', 'QtCurve', 'Windows', 'Fusion']
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
-    MainWindow = App()
+    MainWindow = MainController()
     MainWindow.show()
 
     with loop:
@@ -2779,7 +2254,6 @@ def run():
             task.cancel()
 
         sys.exit(loop.run_forever())
-
 
 if __name__ == "__main__":
     run()

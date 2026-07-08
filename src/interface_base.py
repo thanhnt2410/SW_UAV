@@ -486,39 +486,43 @@ class Interface(QMainWindow):
     def template_information(
         self,
         uav_index: int,
-        connection_status: str = "No information",
-        arming_status: str = "No information",
-        battery_status: str = "No information",
-        gps_status: str = "No information",
-        mode_status: str = "No information",
-        actuator_status: str = "No information",
-        altitude_status: List[str] = None,
-        position_status: List[str] = None,
-        **kwargs
+        telemetry: object = None,
     ) -> str:
         """
         Generate a formatted information display template for a UAV.
         
         Args:
             uav_index: Index of the UAV
-            connection_status: Connection status string
-            arming_status: Arming status string
-            battery_status: Battery status string
-            gps_status: GPS status string
-            mode_status: Flight mode status string
-            actuator_status: Actuator status string
-            altitude_status: List of [relative_altitude, MSL_altitude]
-            position_status: List of [latitude, longitude]
-            **kwargs: Additional parameters for future expansion
+            telemetry: UAVTelemetry object containing current status
             
         Returns:
             Formatted string containing UAV information
         """
-        # Default values for list parameters
-        if altitude_status is None:
+        if telemetry is None:
+            # Fallback for undefined telemetry
+            connection_status = "No information"
+            arming_status = "No information"
+            battery_status = "No information"
+            gps_status = "No information"
+            mode_status = "No information"
+            actuator_status = "No information"
             altitude_status = ["No information", "No information"]
-        if position_status is None:
             position_status = ["No information", "No information"]
+        else:
+            connection_status = str(telemetry.connected)
+            arming_status = str(telemetry.armed)
+            battery_status = str(telemetry.battery_percent)
+            gps_status = str(telemetry.gps_fix_type)
+            mode_status = str(telemetry.flight_mode)
+            actuator_status = str(telemetry.actuator_status)
+            altitude_status = [
+                str(telemetry.altitude_relative_m) if telemetry.altitude_relative_m is not None else "No information",
+                str(telemetry.altitude_msl_m) if telemetry.altitude_msl_m is not None else "No information"
+            ]
+            position_status = [
+                str(telemetry.latitude) if telemetry.latitude is not None else "No information",
+                str(telemetry.longitude) if telemetry.longitude is not None else "No information"
+            ]
             
         # Format the information string
         _translate = QtCore.QCoreApplication.translate
@@ -611,7 +615,7 @@ class Interface(QMainWindow):
             else:
                 # Update all screens
                 for name in ["general_screen", "ovv_screen", "stream_screen"]:
-                    self.update_uav_screen_view(uav_index, frame, screen_name=name)
+                    await self.update_uav_screen_view(uav_index, frame, screen_name=name)
                     
         except Exception as e:
             logger.error(f"Failed to update UAV screen view: {e}")

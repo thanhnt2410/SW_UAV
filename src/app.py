@@ -42,15 +42,15 @@ class Runner:
         self.loop = QEventLoop(self.app)
         asyncio.set_event_loop(self.loop)
         startup_trace("importing main window")
-        from interface_wrapper import App
+        from main_controller import MainController
 
         startup_trace("creating main window")
-        self.window = App()
+        self.window = MainController()
         startup_trace("main window created")
 
     def run(self):
         startup_trace("showing main window")
-        self.window.show()
+        self.window.view.show()
         with self.loop:
             pending = asyncio.all_tasks(loop=self.loop)
             for task in pending:

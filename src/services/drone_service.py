@@ -2,18 +2,19 @@
 Service layer for managing and interacting with the UAV fleet.
 
 This module encapsulates all MAVSDK-related logic, separating it from the
-UI layer (interface_wrapper.py). It is responsible for creating, connecting,
+UI layer (main_controller.py). It is responsible for creating, connecting,
 commanding, and monitoring the status of all UAVs.
 """
 
 import asyncio
 import os
 from datetime import datetime
+from pathlib import Path
 
 from mavsdk import System
 from mavsdk.mission import MissionItem, MissionPlan
 
-from utils.mavsdk_server_utils import MAVSDKServer
+from mavsdk_server.mavsdk_server_utils import MAVSDKServer
 
 
 
@@ -30,42 +31,42 @@ class DroneService:
     def _initialize_uavs(self):
         """Initializes the UAVs dictionary based on the loaded configuration."""
         try:
-            return {
-                uav_conf["id"]: {
-                    "ID": uav_conf["id"],
-                    "server": {
-                        "shell": MAVSDKServer(
-                            id=uav_conf["id"],
-                            protocol=self.config.PROTOCOLS[uav_conf["id"] - 1],
-                            server_host=self.config.SERVER_HOSTS[uav_conf["id"] - 1],
-                            port=self.config.CLIENT_PORTS[uav_conf["id"] - 1],
-                            bind_port=self.config.SERVER_PORTS[uav_conf["id"] - 1],
-                        ),
-                        "start": False,
-                    },
-                    "system": System(mavsdk_server_address="localhost", port=self.config.CLIENT_PORTS[uav_conf["id"] - 1]),
-                    "system_address": self.config.SYSTEMS_ADDRESSES[uav_conf["id"] - 1],
-                    "streaming_address": self.config.DEFAULT_STREAM_VIDEO_PATHS[uav_conf["id"] - 1],
-                    "connection_allow": uav_conf["connection_allow"],
-                    "streaming_enable": uav_conf["streaming_enable"],
-                    "detection_enable": uav_conf["detection_enable"],
-                    "recording_enable": uav_conf["recording_enable"],
-                    "init_params": {
-                        "longitude": self.config.init_pos[f"uav_{uav_conf['id']}"]["longitude"],
-                        "latitude": self.config.init_pos[f"uav_{uav_conf['id']}"]["latitude"],
+            from domain.uav import UAV, UAVConfig, UAVTelemetry
+            uavs = {}
+            for uav_conf in self.config.uav['uavs']:
+                idx = uav_conf["id"]
+                cfg = UAVConfig(
+                    index=idx,
+                    uav_id=idx,
+                    system_address=self.config.SYSTEMS_ADDRESSES[idx - 1],
+                    streaming_address=self.config.DEFAULT_STREAM_VIDEO_PATHS[idx - 1],
+                    connection_allow=uav_conf["connection_allow"],
+                    streaming_enable=uav_conf["streaming_enable"],
+                    detection_enabled=uav_conf["detection_enable"],
+                    recording_enable=uav_conf["recording_enable"],
+                    init_params={
+                        "longitude": self.config.init_pos[f"uav_{idx}"]["longitude"],
+                        "latitude": self.config.init_pos[f"uav_{idx}"]["latitude"],
                         "altitude": uav_conf["init_alt"],
                     },
-                    "overwrite_params": uav_conf["overwrite_params"],
-                    "status": {
-                        "connection_status": False, "streaming_status": False, "on_mission": False,
-                        "mission_start_time": "", "arming_status": "N/A", "battery_status": "N/A",
-                        "gps_status": "N/A", "mode_status": "N/A", "actuator_status": False,
-                        "altitude_status": ["N/A", "N/A"], "position_status": ["N/A", "N/A"],
-                    },
-                    "rescue_first_time": True,
+                    overwrite_params=uav_conf["overwrite_params"]
+                )
+                telemetry = UAVTelemetry()
+                uav = UAV(config=cfg, telemetry=telemetry)
+                uav.server = {
+                    "shell": MAVSDKServer(
+                        id=idx,
+                        protocol=self.config.PROTOCOLS[idx - 1],
+                        server_host=self.config.SERVER_HOSTS[idx - 1],
+                        port=self.config.CLIENT_PORTS[idx - 1],
+                        bind_port=self.config.SERVER_PORTS[idx - 1],
+                    ),
+                    "start": False,
                 }
-                for uav_conf in self.config.uav['uavs']
-            }
+                uav.system = System(mavsdk_server_address="localhost", port=self.config.CLIENT_PORTS[idx - 1])
+                uav.rescue_first_time = True
+                uavs[idx] = uav
+            return uavs
         except Exception as e:
             print(f"[FATAL] Error initializing UAVs in DroneService: {repr(e)}")
             raise
@@ -82,25 +83,25 @@ class DroneService:
     async def connect(self, uav_index):
         uav = self.get_uav(uav_index)
         if not uav: raise ValueError(f"UAV {uav_index} not found.")
-        if not uav["connection_allow"]: raise PermissionError(f"Connection not allowed for UAV {uav_index}")
+        if not uav.config.connection_allow: raise PermissionError(f"Connection not allowed for UAV {uav_index}")
 
-        uav["status"]["connection_status"] = False
+        uav.telemetry.connected = False
 
         # 1. Initialize server
-        uav["server"]["shell"].stop()
+        uav.server["shell"].stop()
         await asyncio.sleep(1)
-        uav["server"]["shell"].start()
-        uav["server"]["start"] = True
+        uav.server["shell"].start()
+        uav.server["start"] = True
         await asyncio.sleep(5)
 
         # 2. Connect to system
-        await uav["system"].connect(system_address=uav["system_address"])
+        await uav.system.connect(system_address=uav.config.system_address)
         is_connected = False
-        async for state in uav["system"].core.connection_state():
+        async for state in uav.system.core.connection_state():
             is_connected = state.is_connected
             break
-        if not is_connected: raise ConnectionError(f"Failed to connect to UAV {uav['ID']}")
-        uav["status"]["connection_status"] = True
+        if not is_connected: raise ConnectionError(f"Failed to connect to UAV {uav.config.uav_id}")
+        uav.telemetry.connected = True
 
         # 3. Configure parameters
         await self._configure_uav_parameters(uav_index)
@@ -110,17 +111,17 @@ class DroneService:
         
         # Overwrite parameters from configuration
         await self.uav_fn_overwrite_params(
-            uav_index=uav_index, parameters=self.uavs[uav_index]["overwrite_params"]
+            uav_index=uav_index, parameters=self.uavs[uav_index].config.overwrite_params
         )
         
         # Set additional parameters manually
-        await self.uavs[uav_index]["system"].action.set_takeoff_altitude(
-            altitude=self.uavs[uav_index]["init_params"]["altitude"]
+        await self.uavs[uav_index].system.action.set_takeoff_altitude(
+            altitude=self.uavs[uav_index].config.init_params["altitude"]
         )
-        await self.uavs[uav_index]["system"].action.set_current_speed(3)
+        await self.uavs[uav_index].system.action.set_current_speed(3)
         
         try:
-            await self.uavs[uav_index]["system"].param.set_param_float("RTL_RETURN_ALT", 5.0)
+            await self.uavs[uav_index].system.param.set_param_float("RTL_RETURN_ALT", 5.0)
             print(f"[INFO] UAV-{uav_index}: Đặt độ cao RTL thành 5m thành công")
         except Exception as e:
             print(f"[ERROR] UAV-{uav_index}: Lỗi khi đặt RTL_RETURN_ALT - {e}")
@@ -131,39 +132,39 @@ class DroneService:
 
     # --- Basic Flight Actions ---
     async def arm(self, uav_index):
-        await self.get_uav(uav_index)["system"].action.arm()
+        await self.get_uav(uav_index).system.action.arm()
 
     async def disarm(self, uav_index):
-        await self.get_uav(uav_index)["system"].action.disarm()
+        await self.get_uav(uav_index).system.action.disarm()
 
     async def takeoff(self, uav_index):
         uav = self.get_uav(uav_index)
-        await uav["system"].action.arm()
-        await uav["system"].action.takeoff()
+        await uav.system.action.arm()
+        await uav.system.action.takeoff()
 
     async def land(self, uav_index):
-        await self.get_uav(uav_index)["system"].action.land()
+        await self.get_uav(uav_index).system.action.land()
 
     async def return_to_launch(self, uav_index):
-        await self.get_uav(uav_index)["system"].action.return_to_launch()
+        await self.get_uav(uav_index).system.action.return_to_launch()
 
     async def goto_location(self, uav_index, latitude, longitude):
         uav = self.get_uav(uav_index)
-        await uav["system"].action.goto_location(latitude, longitude, uav["init_params"]["altitude"], 0)
+        await uav.system.action.goto_location(latitude, longitude, uav.config.init_params["altitude"], 0)
 
     # --- Mission Control ---
 
     async def start_mission(self, uav_index):
-        await self.get_uav(uav_index)["system"].mission.start_mission()
+        await self.get_uav(uav_index).system.mission.start_mission()
 
     async def pause_mission(self, uav_index):
-        await self.get_uav(uav_index)["system"].mission.pause_mission()
+        await self.get_uav(uav_index).system.mission.pause_mission()
 
     # --- Telemetry ---
     async def get_status(self, uav_index):
         """Gathers all telemetry data for a UAV in parallel."""
         uav = self.get_uav(uav_index)
-        if not uav or not uav["status"]["connection_status"]: return
+        if not uav or not uav.telemetry.connected: return
 
         await asyncio.gather(
             self._get_position(uav), self._get_mode(uav), self._get_battery(uav),
@@ -171,29 +172,31 @@ class DroneService:
         )
 
     async def _get_position(self, uav):
-        async for p in uav["system"].telemetry.position():
-            uav["status"]["altitude_status"] = [round(p.relative_altitude_m, 12), round(p.absolute_altitude_m, 12)]
-            uav["status"]["position_status"] = [round(p.latitude_deg, 12), round(p.longitude_deg, 12)]
+        async for p in uav.system.telemetry.position():
+            uav.telemetry.altitude_relative_m = round(p.relative_altitude_m, 12)
+            uav.telemetry.altitude_msl_m = round(p.absolute_altitude_m, 12)
+            uav.telemetry.latitude = round(p.latitude_deg, 12)
+            uav.telemetry.longitude = round(p.longitude_deg, 12)
             break
 
     async def _get_mode(self, uav):
-        async for m in uav["system"].telemetry.flight_mode():
-            uav["status"]["mode_status"] = str(m)
+        async for m in uav.system.telemetry.flight_mode():
+            uav.telemetry.flight_mode = str(m)
             break
 
     async def _get_battery(self, uav):
-        async for b in uav["system"].telemetry.battery():
-            uav["status"]["battery_status"] = f"{round(b.remaining_percent * 100, 1)}%"
+        async for b in uav.system.telemetry.battery():
+            uav.telemetry.battery_percent = f"{round(b.remaining_percent * 100, 1)}%"
             break
 
     async def _get_arm_status(self, uav):
-        async for a in uav["system"].telemetry.armed():
-            uav["status"]["arming_status"] = "ARMED" if a else "DISARMED"
+        async for a in uav.system.telemetry.armed():
+            uav.telemetry.armed = "ARMED" if a else "DISARMED"
             break
 
     async def _get_gps(self, uav):
-        async for g in uav["system"].telemetry.gps_info():
-            uav["status"]["gps_status"] = str(g.fix_type)
+        async for g in uav.system.telemetry.gps_info():
+            uav.telemetry.gps_fix_type = str(g.fix_type)
             break
 
     # --- Parameters ---
@@ -202,7 +205,7 @@ class DroneService:
         params = {}
         for p_name in param_list:
             try:
-                val = await uav["system"].param.get_param_float(p_name)
+                val = await uav.system.param.get_param_float(p_name)
                 params[p_name] = val
             except Exception:
                 params[p_name] = 'N/A'
@@ -211,18 +214,18 @@ class DroneService:
     async def set_params(self, uav_index, params):
         uav = self.get_uav(uav_index)
         for p_name, p_val in params.items():
-            await uav["system"].param.set_param_float(p_name, float(p_val))
+            await uav.system.param.set_param_float(p_name, float(p_val))
 
     # --- Actuator ---
     async def toggle_actuator(self, uav_index):
         uav = self.get_uav(uav_index)
-        current_state = uav["status"]["actuator_status"]
+        current_state = uav.telemetry.actuator_status
         new_state = not current_state
         if new_state: # Open
-            await uav["system"].action.set_actuator(4, -1)
+            await uav.system.action.set_actuator(4, -1)
         else: # Close
-            await uav["system"].action.set_actuator(4, 1)
-        uav["status"]["actuator_status"] = new_state
+            await uav.system.action.set_actuator(4, 1)
+        uav.telemetry.actuator_status = new_state
         await asyncio.sleep(3)
     async def uav_fn_export_params(self, uav_index, save_path) -> None:
         drone = self.get_uav(uav_index)
@@ -237,7 +240,7 @@ class DroneService:
             return
     
         try:
-            param_plugin = drone["system"].param
+            param_plugin = drone.system.param
             params = await param_plugin.get_all_params()
     
             # Extract parameter names and values
@@ -317,7 +320,7 @@ class DroneService:
         parameters = {}
     
         try:
-            param_plugin = drone["system"].param
+            param_plugin = drone.system.param
             params = await param_plugin.get_all_params()
     
             # Extract parameter names for lookup
@@ -387,7 +390,7 @@ class DroneService:
             return
     
         try:
-            param_plugin = drone["system"].param
+            param_plugin = drone.system.param
             params = await param_plugin.get_all_params()
     
             # Extract parameter names and types
@@ -441,23 +444,23 @@ class DroneService:
         """
         try:
             # Set return to launch after mission
-            await drone["system"].mission.set_return_to_launch_after_mission(
+            await drone.system.mission.set_return_to_launch_after_mission(
                 parameters.get("RTL_AFTER_MS", False)
             )
             
             # Set takeoff altitude
             takeoff_alt = parameters.get("MIS_TAKEOFF_ALT", 10.0)
-            await drone["system"].action.set_takeoff_altitude(takeoff_alt)
+            await drone.system.action.set_takeoff_altitude(takeoff_alt)
             
             # Set return to launch altitude (same as takeoff altitude)
-            await drone["system"].action.set_return_to_launch_altitude(takeoff_alt)
+            await drone.system.action.set_return_to_launch_altitude(takeoff_alt)
             
             # Set current speed
-            await drone["system"].action.set_current_speed(
+            await drone.system.action.set_current_speed(
                 parameters.get("CURRENT_SPEED", 3)
             )
             
-            # print(f"Overwritten critical parameters for UAV-{drone['ID']}")
+            # print(f"Overwritten critical parameters for UAV-{drone.config.uav_id}")
             
         except Exception as e:
             print(f"Error overwriting parameters: {repr(e)}")
@@ -467,16 +470,16 @@ class DroneService:
         target_lat, target_lon, target_alt = None, None, None
         try:
             # Get current position if any coordinate is not specified
-            async for position in drone["system"].telemetry.position():
+            async for position in drone.system.telemetry.position():
                 target_lat = latitude if latitude is not None else position.latitude_deg
                 target_lon = longitude if longitude is not None else position.longitude_deg
                 target_alt = altitude if altitude is not None else position.absolute_altitude_m
                 
                 # Command the UAV to go to the location
-                print(f"[DEBUG] UAV-{drone['ID']} initiating GOTO to: lat={target_lat}, lon={target_lon}, alt={target_alt}m")
-                await drone["system"].action.set_current_speed(4)
-                await drone["system"].action.goto_location(target_lat, target_lon, target_alt, float("nan"))
-                print(f"[DEBUG] UAV-{drone['ID']} goto_location command successfully sent to MAVSDK.")
+                print(f"[DEBUG] UAV-{drone.config.uav_id} initiating GOTO to: lat={target_lat}, lon={target_lon}, alt={target_alt}m")
+                await drone.system.action.set_current_speed(4)
+                await drone.system.action.goto_location(target_lat, target_lon, target_alt, float("nan"))
+                print(f"[DEBUG] UAV-{drone.config.uav_id} goto_location command successfully sent to MAVSDK.")
                 break
                 
             # Wait for the UAV to reach the target location
@@ -504,7 +507,7 @@ class DroneService:
         start_time = time.time()
         last_print_time = start_time
     
-        async for position in drone["system"].telemetry.position():
+        async for position in drone.system.telemetry.position():
             current_lat = position.latitude_deg
             current_lon = position.longitude_deg
             current_alt = position.absolute_altitude_m             
@@ -515,15 +518,15 @@ class DroneService:
             
             # Print debug info every 2 seconds to track progress without flooding console
             if time.time() - last_print_time >= 2:
-                print(f"[DEBUG] UAV-{drone['ID']} GOTO Tracking - Lat Diff: {abs(current_lat - target_lat):.6f}, "
+                print(f"[DEBUG] UAV-{drone.config.uav_id} GOTO Tracking - Lat Diff: {abs(current_lat - target_lat):.6f}, "
                       f"Lon Diff: {abs(current_lon - target_lon):.6f}, Alt Diff: {abs(current_alt - target_alt):.2f}m")
                 last_print_time = time.time()
                 
             if lat_reached and lon_reached and alt_reached:
-                print(f"[DEBUG] UAV-{drone['ID']} at {[current_lat, current_lon, current_alt]} successfully REACHED target location.")
+                print(f"[DEBUG] UAV-{drone.config.uav_id} at {[current_lat, current_lon, current_alt]} successfully REACHED target location.")
                 return True
             if time.time() - start_time >= timeout:
-                print(f"[DEBUG] UAV-{drone['ID']} GOTO timeout reaching location ({timeout}s)")
+                print(f"[DEBUG] UAV-{drone.config.uav_id} GOTO timeout reaching location ({timeout}s)")
                 return False    
         return False
 
@@ -544,7 +547,7 @@ class DroneService:
         
         try:
             # Get current position
-            async for position in drone["system"].telemetry.position():
+            async for position in drone.system.telemetry.position():
                 initial_lat = position.latitude_deg
                 initial_lon = position.longitude_deg
                 initial_alt = position.absolute_altitude_m
@@ -584,7 +587,7 @@ class DroneService:
                     raise ValueError(f"Invalid direction: {direction}")
                     
                 # Move to the new position
-                # print(f"UAV-{drone['ID']} moving {distance}m {direction}")
+                # print(f"UAV-{drone.config.uav_id} moving {distance}m {direction}")
                 await self.uav_fn_goto_location(uav_index, lat, lon, alt)
                 break
                 
@@ -614,24 +617,24 @@ class DroneService:
         
         try:
             # Arm the UAV
-            await drone["system"].action.arm()
+            await drone.system.action.arm()
             
             # Initialize actuator control with neutral values
-            await drone["system"].offboard.set_actuator_control(
+            await drone.system.offboard.set_actuator_control(
                 ActuatorControl([ActuatorControlGroup(offsets1), ActuatorControlGroup(offsets2)])
             )
             
             # Start offboard mode
-            print(f"UAV-{drone['ID']} starting offboard mode")
-            await drone["system"].offboard.start()
+            print(f"UAV-{drone.config.uav_id} starting offboard mode")
+            await drone.system.offboard.start()
             
             # Apply the specified controls to the appropriate group
             if group == 0:
-                await drone["system"].offboard.set_actuator_control(
+                await drone.system.offboard.set_actuator_control(
                     ActuatorControl([ActuatorControlGroup(controls), ActuatorControlGroup(offsets2)])
                 )
             elif group == 1:
-                await drone["system"].offboard.set_actuator_control(
+                await drone.system.offboard.set_actuator_control(
                     ActuatorControl([ActuatorControlGroup(offsets1), ActuatorControlGroup(controls)])
                 )
             else:
@@ -641,19 +644,19 @@ class DroneService:
             await asyncio.sleep(2)
             
             # Stop offboard mode
-            print(f"UAV-{drone['ID']} stopping offboard mode")
-            await drone["system"].offboard.stop()
+            print(f"UAV-{drone.config.uav_id} stopping offboard mode")
+            await drone.system.offboard.stop()
             
         except OffboardError as error:
             print(f"Offboard mode error: {error._result.result}")
             print("Disarming UAV")
-            await drone["system"].action.disarm()
+            await drone.system.action.disarm()
             
         except Exception as e:
             print(f"Error in offboard_set_actuator: {repr(e)}")
             try:
                 # Attempt to stop offboard mode in case of error
-                await drone["system"].offboard.stop()
+                await drone.system.offboard.stop()
             except:
                 pass
 
@@ -670,13 +673,13 @@ class DroneService:
         """
         try:
             # Take control of the gimbal
-            #await drone["system"].action.set_actuator(4, -1)
-            await drone["system"].gimbal.take_control(
+            #await drone.system.action.set_actuator(4, -1)
+            await drone.system.gimbal.take_control(
                 control_mode=ControlMode.PRIMARY
             )
             
             # Set gimbal mode to YAW_FOLLOW (yaw follows aircraft heading)
-            await drone["system"].gimbal.set_mode(
+            await drone.system.gimbal.set_mode(
                 GimbalMode.YAW_FOLLOW
             )
             
@@ -684,20 +687,20 @@ class DroneService:
             pitch = control_value.get("pitch", 0)
             yaw = control_value.get("yaw", 0)
             
-            print(f"UAV-{drone['ID']} setting gimbal to pitch: {pitch}°, yaw: {yaw}°")
-            await drone["system"].gimbal.set_pitch_and_yaw(pitch, yaw)
+            print(f"UAV-{drone.config.uav_id} setting gimbal to pitch: {pitch}°, yaw: {yaw}°")
+            await drone.system.gimbal.set_pitch_and_yaw(pitch, yaw)
             
             # Allow time for gimbal to move
             await asyncio.sleep(3)
             
             # Release control of the gimbal
-            await drone["system"].gimbal.release_control()
+            await drone.system.gimbal.release_control()
             
         except Exception as e:
             print(f"Error controlling gimbal: {repr(e)}")
             # Try to release control in case of error
             try:
-                await drone["system"].gimbal.release_control()
+                await drone.system.gimbal.release_control()
             except:
                 pass
 
@@ -713,7 +716,7 @@ class DroneService:
             bool: True if on mission, False otherwise
         """
         try:
-            async for mission_progress in drone["system"].mission.mission_progress():
+            async for mission_progress in drone.system.mission.mission_progress():
                 return mission_progress.current < mission_progress.total
         except Exception as e:
             print(f"Error checking mission status: {repr(e)}")
@@ -731,13 +734,13 @@ class DroneService:
         was_in_air = False
     
         try:
-            async for is_in_air in drone["system"].telemetry.in_air():
+            async for is_in_air in drone.system.telemetry.in_air():
                 if is_in_air:
                     was_in_air = True
                     
                 if was_in_air and not is_in_air:
                     # UAV has landed after being in the air
-                    print(f"UAV-{drone['ID']} has landed, canceling tasks")
+                    print(f"UAV-{drone.config.uav_id} has landed, canceling tasks")
                     
                     # Cancel all running tasks
                     for task in running_tasks:
@@ -809,7 +812,7 @@ class DroneService:
                             parts = line.split(",")
                             if len(parts) == 2:
                                 lat, lon = map(float, parts)
-                                alt = drone["init_params"].get("altitude", 10.0)
+                                alt = drone.config.init_params.get("altitude", 10.0)
                             elif len(parts) == 3:
                                 lat, lon, alt = map(float, parts)
                             else:
@@ -849,12 +852,12 @@ class DroneService:
             mission_plan = MissionPlan(mission_items)
             # ------------------- MISSION UPLOAD -------------------
             if verbose:
-                async for progress in drone["system"].mission.upload_mission_with_progress(mission_plan):
+                async for progress in drone.system.mission.upload_mission_with_progress(mission_plan):
                     print(f"Upload progress: {progress}")
             else:
-                await drone["system"].mission.upload_mission(mission_plan)
+                await drone.system.mission.upload_mission(mission_plan)
     
-            print(f"UAV-{drone['ID']} mission upload complete with {len(mission_items)} waypoints")
+            print(f"UAV-{drone.config.uav_id} mission upload complete with {len(mission_items)} waypoints")
     
         except Exception as e:
             print(f"Error uploading mission: {repr(e)}")
@@ -875,9 +878,9 @@ class DroneService:
         check_count = 0
         
         while check_count < max_checks:
-            async for health in drone["system"].telemetry.health():
+            async for health in drone.system.telemetry.health():
                 if health.is_global_position_ok and health.is_home_position_ok:
-                    # print(f"UAV-{drone['ID']} health check passed")
+                    # print(f"UAV-{drone.config.uav_id} health check passed")
                     return
                     
                 # Log specific issues
@@ -887,12 +890,12 @@ class DroneService:
                 if not health.is_home_position_ok:
                     issues.append("no home position")
                     
-                print(f"UAV-{drone['ID']} health check issues: {', '.join(issues)}")
+                print(f"UAV-{drone.config.uav_id} health check issues: {', '.join(issues)}")
                 check_count += 1
                 await asyncio.sleep(1)
                 break
                 
-        raise RuntimeError(f"UAV-{drone['ID']} failed health check after {max_checks} attempts")
+        raise RuntimeError(f"UAV-{drone.config.uav_id} failed health check after {max_checks} attempts")
 
     async def uav_fn_swarm_goto(self, uav_indices, txt_file_path):
         drones = [self.get_uav(idx) for idx in uav_indices]
@@ -912,10 +915,10 @@ class DroneService:
             lat_detect, lon_detect = map(float, content.strip().split(", "))
     
         if len(drones) == 1:
-            await self.uav_fn_goto_location(drones[0]["ID"], lat_detect, lon_detect)
+            await self.uav_fn_goto_location(drones[0].config.uav_id, lat_detect, lon_detect)
         else:
             await asyncio.gather(
-                *[self.uav_fn_goto_location(drone["ID"], lat_detect, lon_detect) for drone in drones]
+                *[self.uav_fn_goto_location(drone.config.uav_id, lat_detect, lon_detect) for drone in drones]
             )
 
     async def swarm_algorithm(self, uav_indices, n_swarms, txt_file_path):
@@ -942,7 +945,7 @@ class DroneService:
         longitudes = []
     
         for drone in drones:
-            async for position in drone["system"].telemetry.position():
+            async for position in drone.system.telemetry.position():
                 latitudes.append(position.latitude_deg)
                 longitudes.append(position.longitude_deg)
                 break
@@ -952,7 +955,7 @@ class DroneService:
         # sort drones by distance
         sorted_drones = [drone for _, drone in sorted(zip(distances, drones))]
         # selected
-        await self.uav_fn_swarm_goto([d['ID'] for d in sorted_drones[:n_swarms]], txt_file_path)
+        await self.uav_fn_swarm_goto([d.config.uav_id for d in sorted_drones[:n_swarms]], txt_file_path)
 
 
     async def print_mission_progress(self, uav_index) -> None:
@@ -967,9 +970,9 @@ class DroneService:
             This is an asynchronous generator function that should be run as a background task
         """
         try:
-            async for mission_progress in drone["system"].mission.mission_progress():
+            async for mission_progress in drone.system.mission.mission_progress():
                 print(
-                    f"Mission UAV-{drone['ID']} progress: "
+                    f"Mission UAV-{drone.config.uav_id} progress: "
                     f"{mission_progress.current}/{mission_progress.total}"
                 )
         except asyncio.CancelledError:
@@ -988,11 +991,11 @@ class DroneService:
         termination_task = None
         try:
             # Health check before mission
-            # print(f"UAV-{drone['ID']} checking health before mission")
+            # print(f"UAV-{drone.config.uav_id} checking health before mission")
             await self._check_uav_health(uav_index)
             
             # Clear any existing mission
-            await drone["system"].mission.clear_mission()
+            await drone.system.mission.clear_mission()
             
             # Set up monitoring tasks
             print_mission_progress_task = asyncio.ensure_future(self.print_mission_progress(uav_index))
@@ -1005,22 +1008,22 @@ class DroneService:
             
             # Connect to the UAV
             # Bỏ connect lại vì UAV đã connect từ lúc ấn nút trên giao diện rồi, gọi lại dễ gây crash
-            # await drone["system"].connect(drone["system_address"])
+            # await drone.system.connect(drone.config.system_address)
             
             # Arm and take off
-            # print(f"UAV-{drone['ID']} arming")
-            await drone["system"].action.arm()
+            # print(f"UAV-{drone.config.uav_id} arming")
+            await drone.system.action.arm()
             await asyncio.sleep(2)
             
-            # print(f"UAV-{drone['ID']} taking off")
-            await drone["system"].action.takeoff()
+            # print(f"UAV-{drone.config.uav_id} taking off")
+            await drone.system.action.takeoff()
             await asyncio.sleep(3)
             
             # Start the mission
-            # print(f"UAV-{drone['ID']} starting mission")
-            await drone["system"].mission.start_mission()
+            # print(f"UAV-{drone.config.uav_id} starting mission")
+            await drone.system.mission.start_mission()
             await asyncio.sleep(3)
-            await drone["system"].action.set_current_speed(3)
+            await drone.system.action.set_current_speed(3)
             
             # Wait for termination (landing)
             await termination_task

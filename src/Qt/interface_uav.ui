@@ -537,6 +537,40 @@ background-color: rgb(252, 175, 62);</string>
                      </property>
                     </widget>
                    </item>
+                   <item row="7" column="0">
+                    <layout class="QGridLayout" name="gridLayout_uav_select">
+                     <item row="0" column="0">
+                      <widget class="QCheckBox" name="checkBox_sim_uav1">
+                       <property name="text"><string>UAV 1</string></property>
+                      </widget>
+                     </item>
+                     <item row="0" column="1">
+                      <widget class="QCheckBox" name="checkBox_sim_uav2">
+                       <property name="text"><string>UAV 2</string></property>
+                      </widget>
+                     </item>
+                     <item row="0" column="2">
+                      <widget class="QCheckBox" name="checkBox_sim_uav3">
+                       <property name="text"><string>UAV 3</string></property>
+                      </widget>
+                     </item>
+                     <item row="1" column="0">
+                      <widget class="QCheckBox" name="checkBox_sim_uav4">
+                       <property name="text"><string>UAV 4</string></property>
+                      </widget>
+                     </item>
+                     <item row="1" column="1">
+                      <widget class="QCheckBox" name="checkBox_sim_uav5">
+                       <property name="text"><string>UAV 5</string></property>
+                      </widget>
+                     </item>
+                     <item row="1" column="2">
+                      <widget class="QCheckBox" name="checkBox_sim_uav6">
+                       <property name="text"><string>UAV 6</string></property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
                   </layout>
                  </widget>
                 </item>
