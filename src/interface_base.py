@@ -10,13 +10,13 @@ for the UAV control interface.
 
 import asyncio
 import sys
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional
 
 import cv2
 import numpy as np
 from asyncqt import QEventLoop
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtWidgets import QFileDialog, QMainWindow, QMessageBox
+from PyQt5.QtWidgets import QMainWindow, QMessageBox
 
 # Patch asyncqt QEventLoop to handle socket objects correctly
 _orig_add_reader = QEventLoop.add_reader
@@ -41,11 +41,9 @@ QEventLoop.add_writer = _patched_add_writer
 QEventLoop.remove_reader = _patched_remove_reader
 QEventLoop.remove_writer = _patched_remove_writer
 
-from config.interface_config import *
-from config.stream_config import *
-from config.uav_config import *
+from config_loader import ConfigLoader
 from Qt.interface_uav import Ui_MainWindow
-from utils.logger import Logger, get_logger
+from utils.logger import get_logger
 from utils.qt_utils import convert_cv2qt
 
 # UI navigation constants
@@ -78,9 +76,10 @@ class Interface(QMainWindow):
     providing UI components and event handlers for interacting with UAVs.
     """
     
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         """Initialize the interface window and set up UI components."""
         super().__init__()
+        self.config = config or ConfigLoader()
 
         # Set up UI
         self.ui = Ui_MainWindow()
@@ -324,37 +323,40 @@ class Interface(QMainWindow):
 
     def _setup_logo_images(self) -> None:
         """Set up the logo images in the interface."""
+        assets = self.config.interface["assets"]
+
         # Main logo images
-        self.ui.page_name.setPixmap(QtGui.QPixmap(logo1_path))
+        self.ui.page_name.setPixmap(QtGui.QPixmap(assets["logo1"]))
         self.ui.page_name.setScaledContents(True)
-        self.ui.page_name_2.setPixmap(QtGui.QPixmap(logo1_path))
+        self.ui.page_name_2.setPixmap(QtGui.QPixmap(assets["logo1"]))
         self.ui.page_name_2.setScaledContents(True)
         
         # Secondary logo images
-        self.ui.logo2_2.setPixmap(QtGui.QPixmap(logo2_path))
+        self.ui.logo2_2.setPixmap(QtGui.QPixmap(assets["logo2"]))
         self.ui.logo2_2.setScaledContents(True)
-        self.ui.logo2.setPixmap(QtGui.QPixmap(logo2_path))
+        self.ui.logo2.setPixmap(QtGui.QPixmap(assets["logo2"]))
         self.ui.logo2.setScaledContents(True)
         
         # Set application icon
-        self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(app_icon_path)))
+        self.setWindowIcon(QtGui.QIcon(QtGui.QPixmap(assets["app_icon"])))
 
     def _setup_icon_images(self) -> None:
         """Set up button icons in the interface."""
         # Set button icons with error handling
+        buttons = self.config.interface["assets"]["buttons"]
         icon_mappings = {
-            self.ui.btn_arm: arm_icon_path,
-            self.ui.btn_disarm: disarm_icon_path,
-            self.ui.btn_open_close: open_close_icon_path,
-            self.ui.btn_landing: landing_icon_path,
-            self.ui.btn_take_off: takeoff_icon_path,
-            self.ui.btn_pause_resume: pause_icon_path,
-            self.ui.btn_connect: connect_icon_path,
-            self.ui.btn_rtl: rtl_icon_path,
-            self.ui.btn_return: return_icon_path,
-            self.ui.btn_mission: mission_icon_path,
-            self.ui.btn_push_mission: push_mission_icon_path,
-            self.ui.btn_toggle_camera: toggle_icon_path
+            self.ui.btn_arm: buttons["arm"],
+            self.ui.btn_disarm: buttons["disarm"],
+            self.ui.btn_open_close: buttons["open_close"],
+            self.ui.btn_landing: buttons["landing"],
+            self.ui.btn_take_off: buttons["takeoff"],
+            self.ui.btn_pause_resume: buttons["pause"],
+            self.ui.btn_connect: buttons["connect"],
+            self.ui.btn_rtl: buttons["rtl"],
+            self.ui.btn_return: buttons["return"],
+            self.ui.btn_mission: buttons["mission"],
+            self.ui.btn_push_mission: buttons["push_mission"],
+            self.ui.btn_toggle_camera: buttons["toggle_camera"]
         }
         
         for button, icon_path in icon_mappings.items():
@@ -367,17 +369,17 @@ class Interface(QMainWindow):
         """Set default 'no signal' images for all screen views."""
         # Set default images for general screens
         for screen in self.uav_general_screen_views:
-            screen.setPixmap(QtGui.QPixmap(noSignal_img_paths["general_screen"]))
+            screen.setPixmap(QtGui.QPixmap(self.config.noSignal_img_paths["general_screen"]))
             screen.setScaledContents(False)
             
         # Set default images for stream screens
         for screen in self.uav_stream_screen_views:
-            screen.setPixmap(QtGui.QPixmap(noSignal_img_paths["stream_screen"]))
+            screen.setPixmap(QtGui.QPixmap(self.config.noSignal_img_paths["stream_screen"]))
             screen.setScaledContents(False)
             
         # Set default images for overview screens
         for screen in self.uav_ovv_screen_views:
-            screen.setPixmap(QtGui.QPixmap(noSignal_img_paths["ovv_screen"]))
+            screen.setPixmap(QtGui.QPixmap(self.config.noSignal_img_paths["ovv_screen"]))
             screen.setScaledContents(False)
 
     def _setup_event_handlers(self) -> None:
@@ -559,7 +561,7 @@ class Interface(QMainWindow):
                 self.ui.mainTerminal.setFocus()
                 self.ui.mainTerminal.moveCursor(self.ui.mainTerminal.textCursor().End)
                 self.ui.mainTerminal.appendPlainText(text)
-            elif 1 <= uav_index <= MAX_UAV_COUNT:
+            elif 1 <= uav_index <= self.config.MAX_UAV_COUNT:
                 # Update UAV-specific terminal
                 terminal = self.uav_status_views[uav_index - 1]
                 terminal.setFocus()
@@ -587,7 +589,7 @@ class Interface(QMainWindow):
         """
         try:
             # Validate UAV index
-            if not 1 <= uav_index <= MAX_UAV_COUNT:
+            if not 1 <= uav_index <= self.config.MAX_UAV_COUNT:
                 logger.warning(f"Invalid UAV index: {uav_index}")
                 return
                 
@@ -606,10 +608,11 @@ class Interface(QMainWindow):
                     
                 # Use pause image if no frame is provided
                 if frame is None:
-                    frame = cv2.imread(pause_img_paths[screen_name])
+                    frame = cv2.imread(self.config.pause_img_paths[screen_name])
                 
                 # Convert and display frame
-                width, height = screen_sizes[screen_name]
+                screen_size = self.config.screen_sizes[screen_name]
+                width, height = screen_size["width"], screen_size["height"]
                 pixmap = convert_cv2qt(frame, size=(width, height))
                 screen_views[screen_name].setPixmap(pixmap)
             else:

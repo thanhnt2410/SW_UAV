@@ -1,23 +1,4 @@
-"""Polygon-specific geometry operations.
-
-Builds on top of ``planning/geometry.py`` (basic point/line math) to work
-with a polygon's boundary as a whole: splitting a survey area by a set of
-parallel lines (for dividing work between multiple UAVs), point-in-polygon
-containment, and finding every point where a line crosses the polygon's
-edges.
-
-Ported from ``calculation_helpers.py``. A few real issues were found and
-fixed while porting — each is called out in the relevant function's
-docstring:
-- ``ray_casting_point_in_polygon``: could reference an undefined/stale
-  variable when the first polygon edge is horizontal.
-- ``find_parallel_polygon_intersection``: would raise ``IndexError`` if a
-  line produced zero intersections instead of returning no result.
-- ``divide_points``: took an ``edge_slope`` parameter that was never used
-  in its body — dropped here.
-- Debug ``print(...)`` calls replaced with ``logging`` so this module is
-  quiet by default and can be inspected only when a caller enables it.
-"""
+"""Polygon-specific geometry operations."""
 
 from __future__ import annotations
 
@@ -31,20 +12,10 @@ logger = logging.getLogger(__name__)
 Point = Tuple[float, float]
 
 
-# ----------------------------------------------------------------------
-# Line <-> polygon intersections
-# ----------------------------------------------------------------------
 def perpendicular_line_intersect_polygon(
     slope: Optional[float], intercept: float, vertices: List[Point]
 ) -> List[Point]:
-    """Find every point where an (infinite) line ``y = slope*x + intercept``
-    (or the vertical line ``x = intercept`` if ``slope is None``) crosses
-    the edges of ``vertices``.
-
-    Unlike a simple single-segment intersection check, this walks every
-    edge of the polygon and collects all crossings — used to find where a
-    splitting line actually cuts through a survey area's boundary.
-    """
+    """Find every point where a line crosses the polygon edges."""
     across_points: List[Point] = []
     n = len(vertices)
 
@@ -93,10 +64,7 @@ def divide_points(per_points, polygon, slope1, edge_slope):
 def does_line_intersect_polygon(
     mid: Point, slope: Optional[float], intercept: float, vertices: List[Point], tolerance: float = 1e-6
 ) -> Optional[Point]:
-    """Return the first point where line ``(slope, intercept)`` crosses
-    ``vertices``' boundary at a point other than ``mid`` itself (within
-    ``tolerance``), or ``None`` if there's no such crossing.
-    """
+    """Return the first line/polygon crossing other than ``mid``."""
     n = len(vertices)
     for i in range(n):
         x1, y1 = vertices[i]
@@ -140,9 +108,7 @@ def does_line_intersect_polygon(
 def find_line_segment_intersection(
     line_y: float, segment_point1: Point, segment_point2: Point
 ) -> Optional[Point]:
-    """Find where the horizontal line ``y = line_y`` crosses the segment
-    ``(segment_point1, segment_point2)``, or ``None`` if it doesn't.
-    """
+    """Find where a horizontal line crosses a segment."""
     x1, y1 = segment_point1
     x2, y2 = segment_point2
     if y1 == y2:
@@ -157,15 +123,7 @@ def find_line_segment_intersection(
 def find_parallel_polygon_intersection(
     area_vertices: List[Point], spacing: float, number_of_lines: int
 ) -> Tuple[List[Point], List[float], bool]:
-    """Generate a family of horizontal lines spaced ``spacing`` apart
-    (centered on the polygon's longest edge) and find where each one
-    crosses the polygon boundary. Used to lay out parallel scan lines for
-    coverage planning.
-
-    Fix vs. the original: returns ``([], [], True)`` if a polygon this
-    small/this spacing produces zero intersections, instead of raising
-    ``IndexError`` on ``intersection_points[0]``.
-    """
+    """Find scan-line intersections with a polygon boundary."""
     _, longest_edge_endpoints = find_longest_edge(area_vertices)
     x1, y1 = longest_edge_endpoints[0]
     area_min_y = min(v[1] for v in area_vertices)
@@ -202,17 +160,8 @@ def find_parallel_polygon_intersection(
     return intersection_points, segment_length, is_up
 
 
-# ----------------------------------------------------------------------
-# Splitting an area into sub-areas
-# ----------------------------------------------------------------------
 def split_area(area: List[Point], perp: List[Point], tolerance: float = 1e-6) -> List[List[Point]]:
-    """Split a list of points (``area``, in local Cartesian coordinates)
-    into sub-lists based on one or more perpendicular split points
-    (``perp``), grouping points by their y-coordinate relative to each
-    split line. Used to divide a survey area's vertices between multiple
-    UAVs after ``perpendicular_line_intersect_polygon`` locates the split
-    lines.
-    """
+    """Split area points into sub-areas by perpendicular split points."""
 
     def y_leq_with_tolerance(y: float, perp_y: float) -> bool:
         return abs(y) <= abs(perp_y) + tolerance
@@ -260,19 +209,8 @@ def split_area(area: List[Point], perp: List[Point], tolerance: float = 1e-6) ->
     return area_list
 
 
-# ----------------------------------------------------------------------
-# Containment / point-on-boundary checks
-# ----------------------------------------------------------------------
 def ray_casting_point_in_polygon(point: Point, polygon: List[Point]) -> bool:
-    """Determine if ``point`` is inside ``polygon`` (Cartesian
-    coordinates) using the ray-casting method.
-
-    Fix vs. the original: ``xints`` is now initialized to ``None`` at the
-    top of each edge check and only used when it was actually computed
-    this iteration. The original left it unset across iterations, which
-    could reference a stale (or, on the very first horizontal edge,
-    undefined) value.
-    """
+    """Determine if ``point`` is inside ``polygon`` using ray casting."""
     x, y = point
     inside = False
     n = len(polygon)
@@ -294,11 +232,7 @@ def ray_casting_point_in_polygon(point: Point, polygon: List[Point]) -> bool:
 
 
 def point_on_line(point_a: Point, point_c: Point, point_b: Point, margin_of_error: float = 1e-7) -> bool:
-    """Check whether ``point_c`` (lat/lon) lies on the great-circle line
-    segment between ``point_a`` and ``point_b``, within
-    ``margin_of_error`` relative tolerance — done by comparing
-    ``distance(a, c) + distance(c, b)`` against ``distance(a, b)``.
-    """
+    """Check whether ``point_c`` lies on the segment between two points."""
     import math
 
     dist_ab = haversine(point_a[0], point_a[1], point_b[0], point_b[1])
@@ -310,12 +244,7 @@ def point_on_line(point_a: Point, point_c: Point, point_b: Point, margin_of_erro
 def check_and_move_points(
     edge_points: List[Point], rest_points: List[Point]
 ) -> Tuple[List[Point], List[Point]]:
-    """Move any point in ``rest_points`` onto ``edge_points`` if it lies on
-    one of the edges already in ``edge_points`` (within
-    ``point_on_line``'s tolerance). Used after
-    ``geometry.find_polygon_edges`` (convex hull) to reclaim boundary
-    points that the hull skipped because they're collinear with a hull edge.
-    """
+    """Move collinear boundary points from rest_points to edge_points."""
     updated_edges = edge_points[:]
     updated_rest = rest_points[:]
 

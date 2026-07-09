@@ -12,13 +12,12 @@ import shlex
 import signal
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import psutil
 
-from config.interface_config import ROOT_DIR
-
 # Path to the MAVSDK server executable
+ROOT_DIR = Path(__file__).resolve().parents[2]
 MAVSDK_SERVER_PATH = Path(f"{ROOT_DIR}/dependencies/MAVSDK-Python/mavsdk/bin/mavsdk_server")
 
 

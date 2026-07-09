@@ -25,21 +25,14 @@ def haversine(lat1, lon1, lat2, lon2):
 
 
 def convert_to_cartesian(positions):
-    # Find the minimum latitude and longitude to use as the origin
     min_lat = min(positions, key=lambda x: x[0])[0]
     min_lon = min(positions, key=lambda x: x[1])[1]
 
-    # Create a list to hold Cartesian coordinates
     cartesian_coords = []
 
-    # Convert each position to Cartesian coordinates
     for lat, lon in positions:
-        # Distance from the minimum longitude to the current point's longitude (x-coordinate)
         x = haversine(min_lat, min_lon, min_lat, lon)
-        # Distance from the minimum latitude to the current point's latitude (y-coordinate)
         y = haversine(min_lat, min_lon, lat, min_lon)
-
-        # Append the calculated Cartesian coordinates to the list
         cartesian_coords.append((x, y))
 
     return cartesian_coords
@@ -61,14 +54,7 @@ def convert_to_lat_lon(ref_point, distance):
 
 
 def distance_between_points(p1, p2):
-    """
-    Calculate the distance between two points in meters.
-    Args:
-        p1: A tuple (x, y) representing the first point.
-        p2: A tuple (x, y) representing the second point.
-    returns:
-        Float: The distance between the two points in meters.
-    """
+    """Calculate the distance between two points in meters."""
     return haversine(p1[0], p1[1], p2[0], p2[1])
 
 
@@ -89,19 +75,7 @@ def find_perpendicular_slope_intercept(slope, point):
 
 
 def find_intersection(p1, p2, slope, intercept):
-    """
-    Find the intersection point of a line segment and a line.
-
-    Parameters:
-        p1 (tuple): The first point of the line segment (x1, y1).
-        p2 (tuple): The second point of the line segment (x2, y2).
-        slope (float): The slope of the other line.
-        intercept (float): The y-intercept of the other line.
-
-    Returns:
-        list: The intersection point [x_intersect, y_intersect] if it exists and lies within the segment, otherwise None.
-    """
-
+    """Find the intersection point of a line segment and a line."""
     x1, y1 = p1
     x2, y2 = p2
     if x1 == x2:
@@ -190,23 +164,17 @@ def calculate_angle(a, b, c):
     ba = (a[0] - b[0], a[1] - b[1])
     bc = (c[0] - b[0], c[1] - b[1])
 
-    # Dot product
     dot_prod = ba[0] * bc[0] + ba[1] * bc[1]
-    # Magnitude of vector AB and BC
     mag_ab = math.sqrt(ba[0] ** 2 + ba[1] ** 2)
     mag_bc = math.sqrt(bc[0] ** 2 + bc[1] ** 2)
 
     if mag_ab == 0 or mag_bc == 0:
-        # Return an angle of 0 or handle it as needed
         return 0
 
     cosine_angle = (dot_prod) / (mag_ab * mag_bc)
     angle = math.acos(cosine_angle)
-    # Calculate the cross product of vectors ba and bc
     cross_product = ba[0] * bc[1] - ba[1] * bc[0]
-    # Convert the angle from radians to degrees
     angle_degrees = math.degrees(angle)
-    # If the cross product is negative, the angle is reflex, so we adjust the angle
     if cross_product > 0:
         angle_degrees = 360 - angle_degrees
     return angle_degrees
@@ -220,29 +188,17 @@ def heron_formula(a, b, c):
 
 
 def find_longest_edge2(cartesian_coords):
-    """
-    Find the vertices that form the longest edge in a polygon given its vertices in Cartesian coordinates.
-
-    :param cartesian_coords: A list of tuples (x, y) representing the Cartesian coordinates of the polygon vertices.
-    :return: A tuple containing:
-        - the length of the longest edge,
-        - the coordinates of the start vertex of the longest edge,
-        - the coordinates of the end vertex of the longest edge.
-    """
+    """Find the longest edge in a polygon."""
     num_vertices = len(cartesian_coords)
     longest_edge_length = 0
     longest_edge_vertices = (None, None)
 
     for i in range(num_vertices):
-        # Current vertex
         x1, y1 = cartesian_coords[i]
-        # Next vertex, with wrap-around using modulo to close the polygon
         x2, y2 = cartesian_coords[(i + 1) % num_vertices]
 
-        # Calculate the distance between the current vertex and the next vertex
         distance = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
-        # Check if this is the longest edge found so far
         if distance > longest_edge_length:
             longest_edge_length = distance
             longest_edge_vertices = ((x1, y1), (x2, y2))
@@ -251,11 +207,9 @@ def find_longest_edge2(cartesian_coords):
 
 
 def find_midpoint(point1, point2):
-    # Extract coordinates from the points
     x1, y1 = point1
     x2, y2 = point2
 
-    # Calculate the midpoint coordinates
     mid_x = (x1 + x2) / 2.0
     mid_y = (y1 + y2) / 2.0
 
@@ -266,18 +220,13 @@ def line_equation_from_points(p1, p2):
     x1, y1 = p1
     x2, y2 = p2
 
-    # Check for vertical line
     if x1 == x2:
-        # The line is vertical, slope is undefined, and the line equation is x = x1
         return None, x1
 
-    # Check for horizontal line
     elif y1 == y2:
-        # The line is horizontal, slope is 0, and the line equation is y = y1
         return 0, y1
 
     else:
-        # For non-vertical and non-horizontal lines, calculate slope and intercept
         slope = (y2 - y1) / (x2 - x1)
         intercept = y1 - slope * x1
         return slope, intercept
@@ -416,36 +365,28 @@ def is_polygon_convex(points):
 
 
 def sort_polygon_vertices(vertices):
-    # Calculate centroid of the polygon
     centroid_x = sum(x for x, y in vertices) / len(vertices)
     centroid_y = sum(y for x, y in vertices) / len(vertices)
     centroid = (centroid_x, centroid_y)
 
-    # Define a function to calculate the angle between centroid and vertex
     def angle_from_centroid(vertex):
         return math.atan2(vertex[1] - centroid_y, vertex[0] - centroid_x)
 
-    # Sort vertices by the angle from centroid
     sorted_vertices = sorted(vertices, key=angle_from_centroid, reverse=True)
 
     return sorted_vertices
 
 
 def find_polygon_edges(positions):
-    # Convert the list of positions to a NumPy array
     points = np.array(positions)
 
-    # Calculate the convex hull
     print(points)
     hull = ConvexHull(points)
 
-    # Extract the vertices of the convex hull
     hull_vertices = points[hull.vertices]
 
-    # Convert the vertices back to a list of tuples
     edge_points = [tuple(point) for point in hull_vertices]
 
-    # Find the rest of the points that are not on the edges
     rest_points = [point for point in positions if point not in edge_points]
 
     return edge_points, rest_points

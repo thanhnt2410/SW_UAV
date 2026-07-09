@@ -1,12 +1,8 @@
-#Đảm nhiệm trách nhiệm thiết lập RTSP/UDP stream, YOLO inference và render ảnh (convert_cv2qt) lên màn hình giao diện.
-
 import asyncio
-import cv2
 import os
 import numpy as np
 from PyQt5.QtCore import pyqtSlot
 from utils.stream_utils import StreamQtThread
-from utils.qt_utils import convert_cv2qt
 
 __current_path__ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -17,35 +13,29 @@ class StreamController:
     def _create_streaming_threads(self, uav_indexes=None) -> None:
         
         try:
-            # If no specific indexes provided, use all available UAVs
             uav_indexes = range(1, self.app.config.MAX_UAV_COUNT + 1) if uav_indexes is None else uav_indexes
             
             for uav_index in uav_indexes:
-                # Skip UAVs that aren't eligible for streaming
                 if not self._can_stream(uav_index):
                     continue
                     
-                # Configure stream settings
                 stream_config = self._create_stream_config(uav_index)
                 
-                # Determine detection model if enabled
                 detection_model = (
                     self.app.UAVs[uav_index].detection_model
                     if self.app.UAVs[uav_index].config.detection_enabled
                     else None
                 )
                 
-                # Create the streaming thread
                 self.app.UAVs[uav_index].stream_thread = StreamQtThread(
                     uav_index=uav_index,
                     stream_config=stream_config,
-                    detection_model=detection_model
+                    detection_model=detection_model,
+                    device=self.app.config.DEVICE,
                 )
                 
-                # Log the stream configuration
                 self._log_stream_creation(uav_index)
                 
-                # Safely connect signal to slot (disconnect first to prevent duplicate connections)
                 asyncio.create_task(self.app._connect_stream_signal(uav_index))
                 
         except Exception as e:
@@ -59,16 +49,15 @@ class StreamController:
     def _create_stream_config(self, uav_index):
         """Create stream configuration dictionary for a UAV"""
         
-        # Capture settings
         capture = {
             "index": uav_index,
             "address": self.app.UAVs[uav_index].config.streaming_address,
             "width": self.app.config.stream['source']['default_size']['width'],
             "height": self.app.config.stream['source']['default_size']['height'],
             "fps": self.app.config.stream['source']['default_fps'],
+            "log_dir": f"{self.app.config.SRC_DIR}/logs/stream_properties",
         }
         
-        # Recording settings
         writer = {
             "index": uav_index,
             "enable": self.app.UAVs[uav_index].config.recording_enable,
@@ -107,34 +96,27 @@ class StreamController:
             self.app.logger.log("Received empty results in stream handler", level="warning")
             return
             
-        # Unpack the results
         uav_index, current_fps, detected_results = results
         uav_index = int(uav_index)
         
-        # Skip processing if UAV is not eligible for streaming
         if not self._can_stream(uav_index):
             return
             
         try:
-            # Apply frame rate limiting
             if not self._should_process_frame(uav_index, current_fps):
                 return
                 
-            # Select the appropriate frame to display
             streaming_frame = annotated_frame
             
-            # Display the frame
             asyncio.create_task(self.app.update_uav_screen_view(
                 uav_index, streaming_frame, screen_name=self.app.config.stream['display']['default_screen']
             ))
             
-            # Process detection results if available and detection is enabled
             if self.app.UAVs[uav_index].config.detection_enabled and detected_results:
                 asyncio.create_task(self.app._process_detection_results(uav_index, annotated_frame, detected_results))
     
                 
         except Exception as e:
-            # Update status and show error message
             self.app.UAVs[uav_index].telemetry.streaming_status = False
             self.app.logger.log(f"Stream display error for UAV {uav_index}: {repr(e)}", level="error")
             self.app.view.popup_msg(
@@ -152,30 +134,21 @@ class StreamController:
 
     def _should_process_frame(self, uav_index, current_fps):
         """Apply frame rate limiting to avoid overloading the UI."""
-        # Calculate the frame skip rate to achieve target FPS
         max_frame_cnt = max(1, current_fps // self.app.config.stream['source']['default_fps'])
-        
-        # Increment the frame counter for this UAV
         self.app.UAVs[uav_index].stream_frame_count += 1
-        
-        # Process frame if it's time to display based on our rate limiting
         return self.app.UAVs[uav_index].stream_frame_count % max_frame_cnt == 0
 
     def _select_frame_type(self, uav_index, frame, annotated_frame):
         """Select which frame to display based on detection settings."""
-        # Use annotated frame if detection is enabled, otherwise use raw frame
         return annotated_frame if self.app.UAVs[uav_index].config.detection_enabled else frame
 
     def uav_toggle_camera_callback(self, uav_index) -> None:
-        # Handle the case of toggling all UAVs
         if uav_index not in range(1, self.app.config.MAX_UAV_COUNT + 1):
             for i in range(1, self.app.config.MAX_UAV_COUNT + 1):
-                # Only toggle UAVs that are eligible for streaming
                 if self._can_stream(i):
                     self.uav_toggle_camera_callback(i)
             return
         
-        # Skip if UAV is not eligible for streaming
         if not self._can_stream(uav_index):
             self.app.logger.log(
                 f"Camera toggle skipped for UAV {uav_index}: not eligible for streaming",
@@ -184,11 +157,9 @@ class StreamController:
             return
             
         try:
-            # Determine current streaming state
             is_streaming = self.app.UAVs[uav_index].telemetry.streaming_status
             
             if not is_streaming:
-                # Start streaming
                 if self.app.UAVs[uav_index].stream_thread is None:
                     self._create_streaming_threads(uav_indexes=[uav_index])
                     
@@ -198,14 +169,12 @@ class StreamController:
                 self.app.logger.log(f"UAV-{uav_index} streaming started", level="info")
                 self.app.ui.btn_toggle_camera.setStyleSheet("background-color: green")
             else:
-                # Stop streaming
                 self.app.UAVs[uav_index].stream_thread.stop()
                 self.app.UAVs[uav_index].telemetry.streaming_status = False
                 
                 self.app.logger.log(f"UAV-{uav_index} streaming stopped", level="info")
                 self.app.ui.btn_toggle_camera.setStyleSheet("background-color: red")
             
-            # Update thread status
             self.app.UAVs[uav_index].stream_thread.isRunning = self.app.UAVs[uav_index].telemetry.streaming_status
             
         except Exception as e:

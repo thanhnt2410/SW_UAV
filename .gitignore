@@ -178,7 +178,8 @@ build/*.
 cache/*.
 assets/videos/*
 assets/streams/*
-dependencies/
+dependencies/*
+!dependencies/.gitkeep
 src/backup/*
 src/data/parameters/*
 !src/backup/.keep

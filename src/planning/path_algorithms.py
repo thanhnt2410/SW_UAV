@@ -10,7 +10,6 @@ from .polygon_ops import point_on_line
 
 
 def find_zigzag_path(points, uav_init_point):
-    # points_on_row
     i = 1
     j = 0
     n = 100
@@ -30,7 +29,6 @@ def find_zigzag_path(points, uav_init_point):
     points_on_row = [[] for i in range(j+1)] 
     for i in range(j+1):
         points_on_row[i] = sub_list[i]
-        # print(f"points_on_row{i+1}: ", points_on_row[i])
 
     start_distance = distance_between_points(uav_init_point, points_on_row[0][0])
     end_distance = distance_between_points(uav_init_point, points_on_row[0][-1])
@@ -49,12 +47,6 @@ def find_zigzag_path(points, uav_init_point):
     return final_path, start_point
 
 def find_path_0(points, start, turn_threshold=math.pi/6):
-    # Bug fix: previously `unvisited = points.copy()` still contained `start`
-    # (start is one of the survey points, not a separate location), while
-    # `path` already began with `[start]`. Since distance(start, start) == 0
-    # is always the minimum, the first loop iteration re-selected `start`
-    # itself and appended it a second time. Excluding `start` here matches
-    # the behavior of nn_2opt_path/sa_path/ga_path, which never duplicate it.
     unvisited = [p for p in points if p != start]
     path = [start]
     curr = start
@@ -87,7 +79,6 @@ def nn_2opt_path(points, start):
         path.append(nearest)
         unvisited.remove(nearest)
         curr = nearest
-    # simple 2-opt
     improved = True
     while improved:
         improved = False
@@ -362,8 +353,6 @@ def ga_path_with_turns(points, start, pop_size=50, generations=200, mutation_rat
     return best_route
 
 def astar_path_with_turns(points, start):
-    # Same bug fix as find_path_0: exclude start from unvisited so it isn't
-    # re-selected (distance 0) and duplicated as the first two path entries.
     unvisited = set(p for p in points if p != start)
     path = [start]
     curr = start
@@ -487,7 +476,6 @@ def best_path_sw_uav(points, uav_init_point):
         
         xy_path = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in path])
 
-        # Simplified cost calculation for algorithm selection, actual coverage is calculated in the UI
         total_dist = np.sum(np.linalg.norm(np.diff(xy_path, axis=0), axis=1))
         headings = np.arctan2(np.diff(xy_path, axis=0)[:, 1], np.diff(xy_path, axis=0)[:, 0])
         turns = np.sum(np.abs((np.diff(headings) + np.pi) % (2 * np.pi) - np.pi))

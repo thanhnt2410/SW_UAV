@@ -1,7 +1,8 @@
-import os
 import yaml
 from pathlib import Path
 from datetime import datetime
+
+import torch
 
 class ConfigLoader:
     """
@@ -9,19 +10,16 @@ class ConfigLoader:
     It handles path replacements and generates dynamic values needed by the application.
     """
     def __init__(self, config_dir_rel_to_src='../config'):
-        # --- 1. Define Base Paths ---
         self.SRC_DIR = Path(__file__).parent.resolve()
         self.ROOT_DIR = self.SRC_DIR.parent
         self.NOW = datetime.now().strftime("%y-%m-%d_%H-%M-%S")
         self.config_dir = (self.SRC_DIR / config_dir_rel_to_src).resolve()
 
-        # --- 2. Load All YAML Files ---
         self.uav = self._load_yaml('uav_config.yaml')
         self.stream = self._load_yaml('stream_config.yaml')
         self.interface = self._load_yaml('interface_config.yaml')
         self.init_pos = self._load_yaml('init_pos_uavs.yaml')
 
-        # --- 3. Process and Generate Dynamic Values ---
         self._process_paths()
         self._generate_derived_values()
 
@@ -64,12 +62,10 @@ class ConfigLoader:
         Generates values that were previously computed in the old .py config files.
         This makes them directly accessible from the config object.
         """
-        # General values
         self.MODE = self.uav['operation_mode']
         self.MAX_UAV_COUNT = self.uav['general']['max_uav_count']
         self.RESCUE_UAV_INDEX = self.uav['general']['rescue_uav_index']
 
-        # Connection settings based on mode
         conn_conf = self.uav['connection'][self.MODE]
         self.PROTOCOLS = []
         self.SERVER_HOSTS = []
@@ -92,10 +88,8 @@ class ConfigLoader:
             for proto, host, port in zip(self.PROTOCOLS, self.SERVER_HOSTS, self.SERVER_PORTS)
         ]
 
-        # Stream paths
         self.DEFAULT_STREAM_VIDEO_PATHS = self._get_stream_paths()
 
-        # Log paths
         self.DEFAULT_STREAM_VIDEO_LOG_PATHS = [
             f"{self.SRC_DIR}/logs/recordings/stream_log_uav_{i}_{self.NOW}.avi"
             for i in range(1, self.MAX_UAV_COUNT + 1)
@@ -107,13 +101,11 @@ class ConfigLoader:
             f"{self.SRC_DIR}/logs/drone_current_pos/uav_{i}.txt" for i in range(1, self.MAX_UAV_COUNT + 1)
         ]
 
-        # Model paths
         self.model_uav_paths = {
             i: self.stream['model']['yolo_path_template'].format(i=i)
             for i in range(1, self.MAX_UAV_COUNT + 1)
         }
 
-        # Screen sizes and default images
         self.screen_sizes = self.stream['display']['screen_sizes']
         self.noSignal_img_paths = {
             k: self.interface['assets']['default_images']['nosignal_template'].format(w=v['width'], h=v['height'])
@@ -124,6 +116,9 @@ class ConfigLoader:
             for k, v in self.screen_sizes.items()
         }
         self.pause_img_paths["all"] = self.interface['assets']['default_images']['pause_all']
+
+        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.INIT_LAT, self.INIT_LON = self._get_default_init_position()
 
 
     def _get_stream_paths(self):
@@ -140,3 +135,11 @@ class ConfigLoader:
         elif source_type == "rtsp":
             return paths_config['rtsp']
         return []
+
+    def _get_default_init_position(self):
+        """Returns a fallback initial position from init_pos_uavs.yaml."""
+        first_uav = self.init_pos.get('uav_1', {}) if isinstance(self.init_pos, dict) else {}
+        return (
+            float(first_uav.get('latitude', 0.0)),
+            float(first_uav.get('longitude', 0.0)),
+        )

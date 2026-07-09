@@ -3,15 +3,20 @@ import glob
 import os
 import sys
 import subprocess
+import time
 import yaml
 from datetime import datetime
+from pathlib import Path
 
 import cv2
+import numpy as np
+import pandas as pd
 
 import pyfiglet
 from asyncqt import QEventLoop
 # PyQt5
 from PyQt5 import QtWidgets
+from PyQt5.QtCore import Qt
 # pyrefly: ignore [missing-import]
 from PyQt5.QtWidgets import QFileDialog
 
@@ -21,17 +26,16 @@ from ultralytics import YOLO
 # user-defined configuration loader
 from config_loader import ConfigLoader
 # user-defined interface
-from interface_base import *
-from interface_map import *
+from interface_base import logger
+from interface_map import DOT_ICON_PATH, Map
 
 # user-defined utils
 from utils.drone_utils import (
     clear_mission_logs, export_points_to_gps_log,
     select_mission_plan, uav_rescue_process
 )
-from utils.qt_utils import get_system_information, draw_table, get_values_from_table, convert_cv2qt
-from utils.serial_utils import *
-from utils.stream_utils import *
+from utils.qt_utils import get_system_information, draw_table, get_values_from_table
+import serial
 
 # user-defined services
 from services.drone_service import DroneService
@@ -52,6 +56,7 @@ from planning.path_algorithms import (
     reduce_path_collinear,
     sa_path,
 )
+from planning.grid import generate_grid
 from planning.geometry import calculate_new_lat_lon, convert_to_cartesian, latlon_to_xy
 from planning.uav_analyzer import UAVAnalyzer
 
@@ -61,6 +66,8 @@ try:
 except (FileNotFoundError, ValueError) as e:
     print(f"[FATAL] Failed to load configuration: {e}")
     sys.exit(1)
+
+RESCUE_UAV_INDEX = config.RESCUE_UAV_INDEX
 
 # gimbal 
 GIMBAL_C12_PATH = os.path.join(os.path.dirname(__file__), "GimbalC12.py")
@@ -89,8 +96,7 @@ class MainController:
         self.UAVs = self.drone_service.get_all_uavs() # Keep a reference for legacy UI code
         
         # Initialize UI via Composition
-        from interface_map import Map
-        self.view = Map()
+        self.view = Map(config=config)
         self.ui = self.view.ui
         self.logger = logger
         self.logger.log(f"Initialize detection model on {self.config.stream['source'].get('device', 'cpu')}...", level="info")

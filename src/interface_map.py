@@ -1,36 +1,25 @@
 # !/usr/bin/env python3
-import copy
+import asyncio
+import json
 import os
-import pprint
 import sys
 from datetime import datetime
 from pathlib import Path
-import json
 
 # PyQt5
 import pytz
 from asyncqt import QEventLoop
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QFileDialog, QMainWindow, QMessageBox
+from PyQt5 import QtWidgets
+from PyQt5.QtWidgets import QFileDialog
 
 import yaml
 # user-defined modules
-from config.interface_config import *
-from config.stream_config import *
-from config.uav_config import *
-from interface_base import *
-from Qt.interface_uav import *
-
-#
-from utils.drone_utils import *
-from utils.map_engine import *
-from utils.map_folium import *
-from utils.qt_utils import *
+from interface_base import Interface, logger
+from utils.map_engine import MapEngine, geojson_to_coordinates
 
 # --- Refactored planning modules ---
-from planning.grid import area_of_polygon, generate_grid, remove_duplicate_pts, split_polygon_into_areas_old, split_grids
-from planning.geometry import convert_to_cartesian, convert_to_lat_lon
+from planning.grid import area_of_polygon, remove_duplicate_pts, split_polygon_into_areas_old, split_grids
+from planning.geometry import convert_to_cartesian
 from planning.polygon_ops import point_on_line
 from planning.path_algorithms import best_path_sw_uav
 
@@ -64,10 +53,10 @@ class Map(Interface):
     drone_markers_dict = {}
     drone_initial_positions = {}
 
-    def __init__(self):
+    def __init__(self, config=None):
         """Initialize the map interface"""
         print("[startup] initializing Interface", file=sys.stderr, flush=True)
-        Interface.__init__(self)
+        Interface.__init__(self, config=config)
         print("[startup] initializing maps", file=sys.stderr, flush=True)
         self._init_map()
         print("[startup] initializing map events", file=sys.stderr, flush=True)
@@ -83,7 +72,9 @@ class Map(Interface):
             # Initialize Rescue Map (main interactive map)
             print("[startup] creating rescue map", file=sys.stderr, flush=True)
             self.rescue_map = MapEngine(
-                name="Rescue Map", widget=self.ui.MapWebView, url=map_html_path
+                name="Rescue Map",
+                widget=self.ui.MapWebView,
+                url=self.config.interface["map"]["main_html"],
             )
             print("[startup] rescue map created", file=sys.stderr, flush=True)
             self._setup_map_callbacks(self.rescue_map)
@@ -95,7 +86,7 @@ class Map(Interface):
             self.ovv_map = MapEngine(
                 name="Overview Map",
                 widget=self.ui.Overview_map_view,
-                url=map_ovv_html_path,
+                url=self.config.interface["map"]["overview_html"],
             )
             print("[startup] overview map created", file=sys.stderr, flush=True)
             self.ovv_map.mapMovedCallback = self.onMapOvvMoved
@@ -105,7 +96,7 @@ class Map(Interface):
             self.sim_map = MapEngine(
                 name="Simulation Map",
                 widget=self.ui.Overview_map_view_2,
-                url=map_ovv_html_path,
+                url=self.config.interface["map"]["overview_html"],
             )
             self.sim_map.mapMovedCallback = self.onMapSimMoved
             self.sim_map.mapGeojsonCallback = self.onMapGeojson
@@ -1157,7 +1148,7 @@ class Map(Interface):
                         loaded_drones += 1
                     elif not init:
                         # Fallback for current position if not found
-                        lat, lon = (INIT_LAT + 0.0001 * i, INIT_LON + 0.0001 * i)
+                        lat, lon = (self.config.INIT_LAT + 0.0001 * i, self.config.INIT_LON + 0.0001 * i)
                         self.drone_position_list.append((lat, lon))
                         logger.warning(f"No position data found for UAV {drone_id}, using default position")
                 
@@ -1167,7 +1158,7 @@ class Map(Interface):
             # Make sure we have at least one drone position
             if not self.drone_position_list:
                 # Use default position if no drones were loaded
-                default_lat, default_lon = INIT_LAT, INIT_LON
+                default_lat, default_lon = self.config.INIT_LAT, self.config.INIT_LON
                 self.drone_position_list.append((default_lat, default_lon))
                 marker_key = "uav_default"
                 marker_options = {

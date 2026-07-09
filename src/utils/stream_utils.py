@@ -11,15 +11,15 @@ tracking, and video recording.
 import os
 import time
 from collections import defaultdict
+from pathlib import Path
 from threading import Lock, Thread
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QThread, pyqtSignal
 
-from config.stream_config import DEVICE, SRC_DIR
-from utils.model_utils import draw_detected_frame, draw_tracking_frame
+from utils.model_utils import draw_tracking_frame
 
 # Default configuration values
 DEFAULT_BUFFER_SIZE = 2
@@ -241,7 +241,10 @@ class Stream:
             
         try:
             # Create logs directory if it doesn't exist
-            log_dir = f"{SRC_DIR}/logs/stream_properties"
+            log_dir = self.capture_params.get(
+                "log_dir",
+                str(Path(__file__).resolve().parent.parent / "logs" / "stream_properties"),
+            )
             os.makedirs(log_dir, exist_ok=True)
             
             # Determine stream index for filename
@@ -362,6 +365,7 @@ class StreamQtThread(QThread):
         
         # Detection/tracking configuration
         self.model = detection_model
+        self.device = kwargs.get("device", "cpu")
         self.track_history = defaultdict(list)
         self.track_history_seconds = track_history_seconds
         
@@ -447,7 +451,7 @@ class StreamQtThread(QThread):
                             half=False, # use half precision
                             max_det=5,  # maximum detections per image
                             stream_buffer=False,
-                            device=DEVICE,
+                            device=self.device,
                             persist=True,
                             verbose=False,
                         )

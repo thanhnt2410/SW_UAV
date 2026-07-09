@@ -1,5 +1,3 @@
-# Quản lý các vòng lặp asyncio (chạy ngầm định kỳ) để lấy trạng thái Pin, GPS, Chế độ bay, Tọa độ từ MAVSDK và cập nhật trực tiếp lên các UI Label.
-
 import asyncio
 import cv2
 from utils.qt_utils import convert_cv2qt
@@ -27,7 +25,6 @@ class TelemetryController:
         )
 
     async def uav_fn_get_status(self, uav_index, verbose=1) -> None:
-        # Handle getting status for all UAVs
         if uav_index not in range(1, self.app.config.MAX_UAV_COUNT + 1):
             status_tasks = [
                 self.uav_fn_get_status(i, verbose=verbose) # type: ignore
@@ -37,7 +34,6 @@ class TelemetryController:
             await asyncio.gather(*status_tasks)
             return
         
-        # Skip if UAV is not connected and not allowed
         if not (self.app.UAVs[uav_index].telemetry.connected and self.app.UAVs[uav_index].config.connection_allow):
             return
         
@@ -82,18 +78,12 @@ class TelemetryController:
 
     async def uav_fn_get_flight_info(self, uav_index, copy=False) -> None:
         try:
-            # Get parameters from the service
             parameters = await self.app.drone_service.get_params(uav_index, self.app.config.interface['displayed_parameters'])
             
-            # Update parameter display fields
             for i, (param_name, value) in enumerate(parameters.items()):
-                # Format the value to one decimal place
                 formatted_value = str(round(value, 1))
-                
-                # Update the display field
                 self.app.view.uav_param_displays[uav_index - 1].children()[i + 1].setText(formatted_value)
                 
-                # If requested, also copy to the input field
                 if copy:
                     self.app.view.uav_param_sets[uav_index - 1].children()[i + 1].setText(formatted_value)
                     
@@ -108,42 +98,33 @@ class TelemetryController:
     async def uav_fn_set_flight_info(self, uav_index) -> None:
         
         try:
-            # Initialize parameters dictionary
             parameters = {}
             
-            # Get widgets containing current and new values
             input_widgets = self.app.view.uav_param_sets[uav_index - 1].children()[1:-1]
             display_widgets = self.app.view.uav_param_displays[uav_index - 1].children()[1:-1]
             
-            # Populate parameters from input fields, falling back to current values if empty
             for i, (input_widget, display_widget) in enumerate(zip(input_widgets, display_widgets)):
                 param_name = self.app.config.interface['displayed_parameters'][i]
                 input_text = input_widget.text()
                 
                 if not input_text:
-                    # Use current value if input is empty
                     parameters[param_name] = float(display_widget.text())
                 else:
                     try:
-                        # Validate and convert input to float
                         parameters[param_name] = float(input_text)
                     except ValueError:
-                        # Handle invalid input
                         self.app.logger.log(f"Invalid value for parameter {param_name}: {input_text}", level="warning")
                         self.app.view.popup_msg(
                             f"Invalid value for {param_name}: {input_text}", 
                             src_msg="uav_fn_set_flight_info", 
                             type_msg="Warning"
                         )
-                        # Use current value instead
                         parameters[param_name] = float(display_widget.text())
             
             await self.app.drone_service.set_params(uav_index, parameters)
             
-            # Refresh parameter display
             await self.uav_fn_get_flight_info(uav_index=uav_index, copy=False)
             
-            # Log and display success message
             self.app.logger.log(f"Updated flight parameters for UAV {uav_index}", level="info")
             self.app.view.update_terminal(f"[INFO] Updated flight parameters for UAV {uav_index}")
             
@@ -156,20 +137,14 @@ class TelemetryController:
             )
 
     async def uav_fn_print_status(self, uav_index) -> None:
-        # Skip if UAV is not connected or not allowed
         if not self.app._check_uav_connection(uav_index):
             return
         
         try:
-            # Get and display status text messages
             async for status in self.app.drone_service.get_uav(uav_index).system.telemetry.status_text():
-                # Format the status message
                 status_text = f"> {status.type} - {status.text}"
-                
-                # Display in the terminal
                 self.app.view.update_terminal(status_text, uav_index)
                 
-                # Log to file based on severity
                 if status.type.name in ["ERROR", "CRITICAL"]:
                     self.app.logger.log(f"UAV {uav_index}: {status.text}", level="error")
                 elif status.type.name == "WARNING":
@@ -179,4 +154,3 @@ class TelemetryController:
                     
         except Exception as e:
             self.app.logger.log(f"Failed to print status for UAV {uav_index}: {e}", level="error")
-
