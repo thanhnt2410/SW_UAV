@@ -50,3 +50,12 @@ dependencies:
       - colorlog==6.10.1
       - pyfiglet==1.0.4
       - pyproj==3.7.1
+
+      - pyyaml
+      - numpy==2.2.6
+      - scipy==1.15.3
+      - sympy==1.14.0
+      - psutil
+      - jinja2
+      - pytz
+      - matplotlib==3.10.9
