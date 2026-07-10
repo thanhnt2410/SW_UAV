@@ -302,8 +302,7 @@ def split_grids(rotated_area, angle, midpoint, min_lat, min_lon, grid_size, n_ar
             hull = ConvexHull(points)
             hull_vertices = points[hull.vertices]
             points = [tuple(point) for point in hull_vertices]
-            grid_size_list = calculate_grid_size()
-            grid_points = generate_waypoints(points, grid_size_list[i], i)
+            grid_points = generate_grid(points, grid_size)
             areas_dot.append(grid_points)
 
         grid_GPS = []

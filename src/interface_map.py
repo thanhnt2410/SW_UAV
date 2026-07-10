@@ -19,7 +19,6 @@ from utils.map_engine import MapEngine, geojson_to_coordinates
 
 # --- Refactored planning modules ---
 from planning.grid import area_of_polygon, remove_duplicate_pts, split_polygon_into_areas_old, split_grids
-from planning.geometry import convert_to_cartesian
 from planning.polygon_ops import point_on_line
 from planning.path_algorithms import best_path_sw_uav
 
@@ -172,6 +171,105 @@ class Map(Interface):
             )
     # ------------------------ Map Button Event Handlers ------------------------
 
+    def _draw_area_on_maps(self, key, area, area_options, map_names=("rescue", "overview", "sim")):
+        maps = {
+            "rescue": self.rescue_map,
+            "overview": self.ovv_map,
+            "sim": self.sim_map,
+        }
+        for map_name in map_names:
+            maps[map_name].drawPolygon(key=key, coordinates=area, options=area_options)
+
+    def split_area_for_mission(
+        self,
+        polygon_points,
+        n_areas,
+        map_names=("rescue", "overview", "sim"),
+        clear_existing=True,
+        store=True,
+        save_files=True,
+    ):
+        """Split a mission polygon and draw the resulting areas like the Rescue Map flow."""
+        if not polygon_points or len(polygon_points) < 3:
+            raise ValueError("Invalid polygon. Need at least 3 points.")
+
+        polygon_points = [tuple(point) for point in polygon_points]
+        if polygon_points[0] == polygon_points[-1]:
+            polygon_points = polygon_points[:-1]
+
+        if clear_existing:
+            self.remove_objects(["markers", "paths", "areas"])
+
+        if store:
+            self.drone_areas_dict = {}
+
+        n_areas = max(1, int(n_areas))
+        area_options = dict(
+            color="blue",
+            weight=2,
+            fill=True,
+            fillColor="blue",
+            fillOpacity=0.2
+        )
+
+        if n_areas <= 1:
+            area = polygon_points.copy()
+            if area[0] != area[-1]:
+                area.append(area[0])
+
+            key = "Area_0"
+            self._draw_area_on_maps(key, area, area_options, map_names)
+
+            if store:
+                self.drone_areas_dict[key] = area
+
+            if save_files:
+                area_file = f"{PARENT_DIR}/src/logs/area/area1.txt"
+                with open(area_file, "w") as file:
+                    for lat, lon in area:
+                        file.write(f"{lat}, {lon}\n")
+
+            return {
+                "gps_areas": [area],
+                "rotated_area_list": None,
+                "extra": None,
+            }
+
+        splitted_areas, rotated_area_list, angle, midpoint, min_lat, min_lon = split_polygon_into_areas_old(
+            polygon_points,
+            n_areas,
+        )
+
+        gps_areas = []
+        for ind, area in enumerate(splitted_areas):
+            area = [tuple(point) for point in area]
+            if area[0] != area[-1]:
+                area.append(area[0])
+
+            key = f"Area_{ind}"
+            self._draw_area_on_maps(key, area, area_options, map_names)
+            gps_areas.append(area)
+
+            if store:
+                self.drone_areas_dict[key] = area
+
+            if save_files:
+                area_file = f"{PARENT_DIR}/src/logs/area/area{ind + 1}.txt"
+                with open(area_file, "w") as file:
+                    for lat, lon in area:
+                        file.write(f"{lat}, {lon}\n")
+
+        extra = (angle, midpoint, min_lat, min_lon)
+        if store:
+            self.rotated_area_list = rotated_area_list
+            self.extra = extra
+
+        return {
+            "gps_areas": gps_areas,
+            "rotated_area_list": rotated_area_list,
+            "extra": extra,
+        }
+
     def btn_map_create_routes_callback(self):
         """
         Create or remove flight routes connecting grid points for each drone
@@ -217,23 +315,28 @@ class Map(Interface):
 
             # Create paths for each area with a different color
             for ind, (_, value) in enumerate(area_grid_points.items()):
+                if not value:
+                    continue
+
                 color = colors[ind % len(colors)]
+                drone_start = self.drone_position_list[min(ind, len(self.drone_position_list) - 1)]
 
-                # First path: from drone to first grid point
-                start = self.drone_position_list[ind]
-                end = value[0]
-
-                path_key = f"A{ind + 1}P{0}-{1}"
-                self.rescue_map.drawPolyLine(
-                    path_key, [start, end], options=dict(color=color, weight=5)
-                )
-                self.ovv_map.drawPolyLine(
-                    path_key, [start, end], options=dict(color=color, weight=5)
-                )
-                self.sim_map.drawPolyLine(
-                    path_key, [start, end], options=dict(color=color, weight=5)
-                )
-                self.drone_paths_dict[path_key] = (start, end)
+                # If the planned path does not already start at the UAV,
+                # draw the connector explicitly as a fallback.
+                if value[0] != drone_start:
+                    start = drone_start
+                    end = value[0]
+                    path_key = f"A{ind + 1}P{0}-{1}"
+                    self.rescue_map.drawPolyLine(
+                        path_key, [start, end], options=dict(color=color, weight=5)
+                    )
+                    self.ovv_map.drawPolyLine(
+                        path_key, [start, end], options=dict(color=color, weight=5)
+                    )
+                    self.sim_map.drawPolyLine(
+                        path_key, [start, end], options=dict(color=color, weight=5)
+                    )
+                    self.drone_paths_dict[path_key] = (start, end)
 
                 # Connect all remaining points in sequence
                 for j in range(1, len(value)):
@@ -415,8 +518,9 @@ class Map(Interface):
     def _process_single_area(self, area_points, area_index, marker_options):
         """Process and display grid points for a single area"""
         # Find optimal path through points
-        # ordered_points = find_path(area_points, self.drone_position_list[0])
-        ordered_points = best_path_sw_uav(area_points, self.drone_position_list[0])
+        drone_index = min(area_index - 1, len(self.drone_position_list) - 1)
+        uav_start = self.drone_position_list[drone_index]
+        ordered_points = best_path_sw_uav(area_points, uav_start)
         ordered_points = remove_duplicate_pts(ordered_points)
 
         # Check if there are too many points
@@ -576,89 +680,19 @@ class Map(Interface):
             if self.debug:
                 print("Polygon points:", polygon_points)
 
-            # Clear existing objects
-            self.remove_objects(["markers", "paths", "areas"])
-            self.drone_areas_dict = {}
-            
             # Determine number of areas
             n_areas = min(self.noArea, self.drone_num)
             logger.info(f"Requested split into {n_areas} parts")
 
-            # Handle case for 1 area (no splitting needed)
-            if n_areas <= 1:
-                logger.info("Only 1 area requested. Drawing original polygon.")
-
-                # Ensure polygon is closed for drawing
-                if polygon_points[0] != polygon_points[-1]:
-                    polygon_points.append(polygon_points[0])
-
-                key = "Area_0"
-                area_options = dict(
-                    color="blue",
-                    weight=2,
-                    fill=True,
-                    fillColor="blue",
-                    fillOpacity=0.2
-                )
-
-                self.rescue_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
-                self.ovv_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
-                self.sim_map.drawPolygon(key=key, coordinates=polygon_points, options=area_options)
-                self.drone_areas_dict[key] = polygon_points
-
-                # Save area to file
-                area_file = f"{PARENT_DIR}/src/logs/area/area1.txt"
-                with open(area_file, "w") as file:
-                    for lat, lon in polygon_points:
-                        file.write(f"{lat}, {lon}\n")
-
-                # Populate necessary attributes for the next step (grid generation)
-                ref_lat = min(p[0] for p in polygon_points)
-                ref_lon = min(p[1] for p in polygon_points)
-                self.split_ref_point = (ref_lat, ref_lon)
-                self.cartesian_sub_areas = {0: convert_to_cartesian(polygon_points)}
-
-                return
-
-            # Split the polygon
-            n_areas = min(self.noArea, self.drone_num)
             logger.info(f"Splitting area into {n_areas} parts")
-            
-            splitted_areas, rotated_area_list, angle, midpoint, min_lat, min_lon = split_polygon_into_areas_old(polygon_points, n_areas)
-
-            # Draw the split areas on the map
-            for ind, area in enumerate(splitted_areas):
-                if self.debug:
-                    print(f"Area {ind}: {area}")
-
-                # Ensure polygon is closed
-                if area[0] != area[-1]:
-                    area.append(area[0])
-
-                # Draw on both maps
-                key = f"Area_{ind}"
-                area_options = dict(
-                    color="blue",
-                    weight=2,
-                    fill=True,
-                    fillColor="blue",
-                    fillOpacity=0.2
-                )
-                
-                self.rescue_map.drawPolygon(key=key, coordinates=area, options=area_options)
-                self.ovv_map.drawPolygon(key=key, coordinates=area, options=area_options)
-                self.sim_map.drawPolygon(key=key, coordinates=area, options=area_options)
-                self.drone_areas_dict[key] = area
-
-                # Save area to file
-                area_file = f"{PARENT_DIR}/src/logs/area/area{ind + 1}.txt"
-                with open(area_file, "w") as file:
-                    for lat, lon in area:
-                        file.write(f"{lat}, {lon}\n")
-
-            # Store for later use
-            self.rotated_area_list = rotated_area_list
-            self.extra = (angle, midpoint, min_lat, min_lon)
+            self.split_area_for_mission(
+                polygon_points,
+                n_areas,
+                map_names=("rescue", "overview", "sim"),
+                clear_existing=True,
+                store=True,
+                save_files=True,
+            )
 
             # Redraw drones from memory to ensure they are visible
             for key, (lat, lon) in self.drone_initial_positions.items():
@@ -681,6 +715,23 @@ class Map(Interface):
                 type_msg="error"
             )
 
+
+    def reduce_points_in_path(self, points_in_area):
+        """Reduce path points using the same collinearity rule as the Rescue Map."""
+        if len(points_in_area) < 3:
+            return points_in_area
+
+        filtered_points = [points_in_area[0]]
+        i = 1
+        while i < len(points_in_area) - 1:
+            if point_on_line(points_in_area[i - 1], points_in_area[i], points_in_area[i + 1]): # type: ignore
+                i += 1
+            else:
+                filtered_points.append(points_in_area[i])
+                i += 1
+        filtered_points.append(points_in_area[-1])
+
+        return filtered_points
 
 
     def btn_map_reduce_points_callback(self):
@@ -715,19 +766,7 @@ class Map(Interface):
 
             # Process each area
             for ind, points_in_area in enumerate(area_grid_points.values()):
-                if len(points_in_area) < 3:
-                    filtered_points = points_in_area
-                else:
-                    # Reduce points by removing intermediate ones on straight lines
-                    filtered_points = [points_in_area[0]]
-                    i = 1
-                    while i < len(points_in_area) - 1:
-                        if point_on_line(points_in_area[i - 1], points_in_area[i], points_in_area[i + 1]): # type: ignore
-                            i += 1
-                        else:
-                            filtered_points.append(points_in_area[i])
-                            i += 1
-                    filtered_points.append(points_in_area[-1])
+                filtered_points = self.reduce_points_in_path(points_in_area)
 
                 # Add reduced points to the list
                 reduced_grid_point_list.append(filtered_points)
@@ -1211,6 +1250,35 @@ class Map(Interface):
         It's designed to be called periodically to reflect live position changes.
         """
         self.show_drones(init=False)
+
+    def update_single_drone_position(self, drone_id, lat, lon):
+        """Move one UAV marker on all maps without redrawing every marker."""
+        if lat is None or lon is None:
+            return
+
+        marker_key = f"uav_{drone_id}"
+        marker_options = {
+            "icon": DRONE_ICON_PATH,
+            "draggable": False,
+            "title": f"UAV {drone_id}",
+            "iconSize": {"width": 21, "height": 21},
+        }
+
+        if marker_key in self.drone_initial_positions:
+            self.rescue_map.mapMoveMarker(marker_key, float(lat), float(lon))
+            self.ovv_map.mapMoveMarker(marker_key, float(lat), float(lon))
+            self.sim_map.mapMoveMarker(marker_key, float(lat), float(lon))
+        else:
+            self.rescue_map.addMarker(key=marker_key, latitude=float(lat), longitude=float(lon), **marker_options)
+            self.ovv_map.addMarker(key=marker_key, latitude=float(lat), longitude=float(lon), **marker_options)
+            self.sim_map.addMarker(key=marker_key, latitude=float(lat), longitude=float(lon), **marker_options)
+
+        self.drone_initial_positions[marker_key] = (float(lat), float(lon))
+        index = int(drone_id) - 1
+        if index >= 0:
+            while len(self.drone_position_list) <= index:
+                self.drone_position_list.append((float(lat), float(lon)))
+            self.drone_position_list[index] = (float(lat), float(lon))
 
     def show_geodata(self, geodata: dict) -> None:
         print("[DEBUG] show_geodata called.")

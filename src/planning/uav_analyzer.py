@@ -336,6 +336,102 @@ class UAVAnalyzer:
 
         return fig
 
+    def visualize_multi_paths(
+        self,
+        paths_by_label: Dict[Any, List[GPSPoint]],
+        title: str = "Multi-UAV Coverage",
+        show_waypoints: bool = True,
+        figsize: Tuple[float, float] = (9, 7),
+        save_path: Optional[str] = None,
+        show: bool = True,
+    ):
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Polygon as MplPolygon
+            from matplotlib.patches import Patch as MplLegendPatch
+            from matplotlib.lines import Line2D
+        except ImportError as exc:
+            raise ImportError(
+                "Cần cài matplotlib để vẽ: pip install matplotlib"
+            ) from exc
+
+        valid_paths = {
+            label: path
+            for label, path in paths_by_label.items()
+            if path
+        }
+        if not valid_paths:
+            raise ValueError("paths_by_label không có path hợp lệ.")
+
+        survey_polygon = self.build_survey_polygon()
+        footprints = [
+            self._build_path_footprint(self._gps_list_to_xy(path))
+            for path in valid_paths.values()
+        ]
+        coverage_footprint = unary_union(footprints)
+        covered_polygon = survey_polygon.intersection(coverage_footprint)
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        for poly in self._iter_polygons(covered_polygon):
+            x, y = poly.exterior.xy
+            ax.add_patch(
+                MplPolygon(list(zip(x, y)), closed=True, facecolor="#2ecc71",
+                          edgecolor="none", alpha=0.55, label="_nolegend_")
+            )
+            for interior in poly.interiors:
+                xi, yi = interior.xy
+                ax.add_patch(
+                    MplPolygon(list(zip(xi, yi)), closed=True,
+                              facecolor="white", edgecolor="none", alpha=1.0)
+                )
+
+        sx, sy = survey_polygon.exterior.xy
+        ax.plot(sx, sy, color="#2980b9", linewidth=2, linestyle="--")
+
+        colors = ["#e67e22", "#9b59b6", "#16a085", "#c0392b", "#34495e", "#f1c40f"]
+        legend_handles = [
+            Line2D([0], [0], color="#2980b9", linewidth=2, linestyle="--",
+                   label="Vùng khảo sát"),
+        ]
+
+        for color_idx, (label, path) in enumerate(valid_paths.items()):
+            xy_path = self._gps_list_to_xy(path)
+            line = LineString(xy_path)
+            fx, fy = line.xy
+            color = colors[color_idx % len(colors)]
+            ax.plot(fx, fy, color=color, linewidth=1.5)
+            if show_waypoints:
+                ax.scatter(fx, fy, color=color, s=15, zorder=5)
+            legend_handles.append(
+                Line2D([0], [0], color=color, linewidth=1.5, label=f"UAV {label}")
+            )
+
+        if show_waypoints:
+            legend_handles.append(
+                Line2D([0], [0], marker="o", color="none",
+                       markerfacecolor="#555555", markersize=6, label="Waypoint")
+            )
+        legend_handles.append(
+            MplLegendPatch(facecolor="#2ecc71", edgecolor="none", alpha=0.55,
+                            label="Vùng đã quét")
+        )
+
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title(title)
+        ax.legend(handles=legend_handles, loc="best")
+        ax.grid(True, linestyle=":", alpha=0.4)
+        fig.tight_layout()
+
+        if save_path:
+            fig.savefig(save_path, dpi=150)
+        if show:
+            plt.show()
+
+        return fig
+
 
 if __name__ == "__main__":
     area = [

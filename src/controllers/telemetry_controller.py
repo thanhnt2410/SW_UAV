@@ -39,6 +39,18 @@ class TelemetryController:
         
         try:
             await self.app.drone_service.get_status(uav_index)
+            telemetry = self.app.UAVs[uav_index].telemetry
+            self.app._update_position_log(
+                uav_index,
+                telemetry.latitude,
+                telemetry.longitude,
+                telemetry.altitude_msl_m,
+            )
+            self.app.view.update_single_drone_position(
+                uav_index,
+                telemetry.latitude,
+                telemetry.longitude,
+            )
             self._update_uav_info_display(uav_index)
             await self.uav_fn_get_flight_info(uav_index, copy=False) # Keep UI-related param logic here
             if verbose:
@@ -58,6 +70,11 @@ class TelemetryController:
         await self.app.drone_service.get_status(uav_index)
         uav_data = self.app.drone_service.get_uav(uav_index)
         self.app._update_position_log(uav_index, uav_data.telemetry.latitude, uav_data.telemetry.longitude, uav_data.telemetry.altitude_msl_m)
+        self.app.view.update_single_drone_position(
+            uav_index,
+            uav_data.telemetry.latitude,
+            uav_data.telemetry.longitude,
+        )
         self._update_uav_info_display(uav_index)
 
     async def uav_fn_get_mode(self, uav_index) -> None:

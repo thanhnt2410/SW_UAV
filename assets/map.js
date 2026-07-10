@@ -272,19 +272,28 @@ function posMarkerJs(key) {
 
 // ================== Line ==================
 function drawPolyLineJs(key, coords, options) {
+    if (lines[key]) {
+        deletePolyLineJs(key);
+    }
     var polyline = L.polyline(coords, options)
     polyline.addTo(map);
     lines[key] = polyline;
     return key;
 }
 
-function deletePolyLineJs() {
+function deletePolyLineJs(key) {
+    if (!lines[key]) {
+        return;
+    }
     map.removeLayer(lines[key]);
     delete lines[key];
 }
 
 // ================== Polygon ==================
 function drawPolygonJs(key,coords, options) {
+    if (polygons[key]) {
+        deletePolygonJs(key);
+    }
     var polygon = L.polygon(coords, options);
     polygon.addTo(map);
     polygons[key] = polygon;
@@ -292,6 +301,9 @@ function drawPolygonJs(key,coords, options) {
 }
 
 function deletePolygonJs(key) {
+    if (!polygons[key]) {
+        return;
+    }
     map.removeLayer(polygons[key]);
     delete polygons[key];
 }

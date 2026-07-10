@@ -53,11 +53,10 @@ from planning.path_algorithms import (
     ga_path,
     ga_path_with_turns,
     nn_2opt_path,
-    reduce_path_collinear,
     sa_path,
 )
-from planning.grid import generate_grid
-from planning.geometry import calculate_new_lat_lon, convert_to_cartesian, latlon_to_xy
+from planning.grid import generate_grid, split_grids
+from planning.geometry import calculate_new_lat_lon, latlon_to_xy
 from planning.uav_analyzer import UAVAnalyzer
 
 # --- Load Application Configuration ---
@@ -1142,11 +1141,15 @@ class MainController:
                 
             self.view.update_terminal(f"[INFO] Bắt đầu nạp {plan_file} và tiến hành cất cánh...", uav_index=0)
             progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
+            position_task = asyncio.create_task(self._track_uav_position_on_map(uav_index))
 
             await self.drone_service.do_mission_and_wait(uav_index, plan_file)
             
-            if not progress_task.done():
-                progress_task.cancel()
+            background_tasks = [progress_task, position_task]
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*background_tasks, return_exceptions=True)
             # Update display
             self.telemetry_controller._update_uav_info_display(uav_index)
             
@@ -1424,6 +1427,9 @@ class MainController:
 
     def _update_position_log(self, uav_index, latitude, longitude, altitude=0.0):
         """Update the current position log file for the UAV."""
+        if latitude is None or longitude is None:
+            return
+
         try:
             position_file = self.config.drone_current_pos_files[uav_index - 1]
             
@@ -1612,6 +1618,45 @@ class MainController:
         except Exception as e:
             self.logger.error(f"Error monitoring mission progress for UAV {uav_index}: {e}")
 
+    async def _track_uav_position_on_map(self, uav_index):
+        """Continuously move the UAV marker while a mission is active."""
+        try:
+            uav = self.UAVs[uav_index]
+            if uav.system is None:
+                return
+
+            last_update = 0.0
+            async for position in uav.system.telemetry.position():
+                if not uav.telemetry.on_mission:
+                    break
+
+                now = time.time()
+                if now - last_update < 0.5:
+                    continue
+                last_update = now
+
+                uav.telemetry.latitude = round(position.latitude_deg, 12)
+                uav.telemetry.longitude = round(position.longitude_deg, 12)
+                uav.telemetry.altitude_msl_m = round(position.absolute_altitude_m, 12)
+                uav.telemetry.altitude_relative_m = round(position.relative_altitude_m, 12)
+
+                self._update_position_log(
+                    uav_index,
+                    uav.telemetry.latitude,
+                    uav.telemetry.longitude,
+                    uav.telemetry.altitude_msl_m,
+                )
+                self.view.update_single_drone_position(
+                    uav_index,
+                    uav.telemetry.latitude,
+                    uav.telemetry.longitude,
+                )
+                self.telemetry_controller._update_uav_info_display(uav_index)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.logger.log(f"Failed to track UAV {uav_index} position on map: {e}", level="warning")
+
     def _on_map_type_changed(self, index):
         """Đổi form nhập liệu tương ứng khi chọn Map Type."""
         if index in [0, 3, 4]:  # Square, Pentagon, Hexagon dùng chung trang 1 tham số
@@ -1628,6 +1673,81 @@ class MainController:
             self.ui.stackedMapParam_2.setCurrentIndex(3)
 
     # ------------------------------------< Simulation Functions >-----------------------------
+    def _get_selected_sim_uavs(self):
+        sim_uav_widgets = [
+            self.ui.checkBox_sim_uav1,
+            self.ui.checkBox_sim_uav2,
+            self.ui.checkBox_sim_uav3,
+            self.ui.checkBox_sim_uav4,
+            self.ui.checkBox_sim_uav5,
+            self.ui.checkBox_sim_uav6,
+        ]
+
+        if self.ui.All_UAVs.isChecked():
+            return list(range(1, min(len(sim_uav_widgets), self.config.MAX_UAV_COUNT) + 1))
+
+        return [
+            index
+            for index, widget in enumerate(sim_uav_widgets, start=1)
+            if widget.isChecked()
+        ]
+
+    async def _get_sim_uav_start_positions(self, selected_uavs):
+        start_positions = {}
+        for uav_index in selected_uavs:
+            await self.telemetry_controller.uav_fn_get_position(uav_index)
+            start_lat = self.UAVs[uav_index].telemetry.latitude
+            start_lon = self.UAVs[uav_index].telemetry.longitude
+
+            if not isinstance(start_lat, (int, float)) or not isinstance(start_lon, (int, float)):
+                self.view.update_terminal(
+                    f"[SIM] Không lấy được vị trí hiện tại UAV {uav_index}, dùng vị trí khởi tạo.",
+                    0,
+                )
+                start_lat = self.UAVs[uav_index].config.init_params["latitude"]
+                start_lon = self.UAVs[uav_index].config.init_params["longitude"]
+
+            start_positions[uav_index] = (start_lat, start_lon)
+        return start_positions
+
+    def _ensure_path_starts_at_uav(self, path, start_coord):
+        if not path:
+            return []
+        if abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7:
+            return [start_coord] + path
+        return path
+
+    def _clear_simulation_layers(self, include_grid=False, include_best=False):
+        marker_prefixes = ["sim_current_pt_"]
+        polyline_names = ["current_run_path_polyline"]
+
+        if include_grid:
+            marker_prefixes.append("sim_grid_pt_")
+        if include_best:
+            marker_prefixes.append("sim_best_pt_")
+            polyline_names.append("best_path_polyline")
+
+        marker_prefixes_js = ", ".join(repr(prefix) for prefix in marker_prefixes)
+        polyline_names_js = ", ".join(repr(name) for name in polyline_names)
+        self.view.sim_map.runScript(f"""
+            if (typeof map !== 'undefined') {{
+                const markerPrefixes = [{marker_prefixes_js}];
+                const polylineNames = [{polyline_names_js}];
+                map.eachLayer(function (layer) {{
+                    if (layer instanceof L.Marker && layer.options.name) {{
+                        if (markerPrefixes.some(function(prefix) {{ return layer.options.name.startsWith(prefix); }})) {{
+                            map.removeLayer(layer);
+                        }}
+                    }}
+                    if (layer instanceof L.Polyline && layer.options.name) {{
+                        if (polylineNames.indexOf(layer.options.name) !== -1) {{
+                            map.removeLayer(layer);
+                        }}
+                    }}
+                }});
+            }}
+        """)
+
     async def run_simulation_callback(self):
         """
         Handles the 'Run Simulation' button click event.
@@ -1637,24 +1757,27 @@ class MainController:
         - Displays results in the comparison table and on the simulation map.
         """
 
-        # Kiểm tra kết nối UAV 1 ngay từ đầu trước khi tính toán
-        if not self._check_uav_connection(1, strictly=True):
-            self.view.update_terminal("[SIM] UAV 1 is not connected. Simulation aborted.", 0)
-            self.view.popup_msg("Vui lòng Connect UAV 1 trước khi chạy Simulation!", "Simulation", "Warning")
+        selected_uavs = self._get_selected_sim_uavs()
+        if not selected_uavs:
+            self.view.popup_msg("Vui lòng chọn ít nhất một UAV để chạy Simulation.", "Simulation", "Warning")
+            return
+
+        disconnected_uavs = [
+            uav_index
+            for uav_index in selected_uavs
+            if not self._check_uav_connection(uav_index, strictly=True)
+        ]
+        if disconnected_uavs:
+            uav_names = ", ".join(f"UAV {uav_index}" for uav_index in disconnected_uavs)
+            self.view.update_terminal(f"[SIM] {uav_names} chưa connected. Simulation aborted.", 0)
+            self.view.popup_msg(f"Vui lòng Connect {uav_names} trước khi chạy Simulation!", "Simulation", "Warning")
             return
 
         self.view.update_terminal("[SIM] Starting simulation...", 0)
 
-        # 1. Clear previous results
-        self.view.sim_map.runScript("""
-            if (typeof map !== 'undefined') {
-                map.eachLayer(function (layer) {
-                    if (layer instanceof L.Marker || layer instanceof L.Polygon || layer instanceof L.Polyline) {
-                        map.removeLayer(layer);
-                    }
-                });
-            }
-        """)
+        # 1. Clear only temporary simulation layers. Keep existing labels/areas/path
+        # visible until their replacements are ready to draw.
+        self._clear_simulation_layers()
 
         # Clear only data columns, keep algorithm names in column 0
         for row in range(self.ui.tableWidgetAlgorithmComparison.rowCount()):
@@ -1695,22 +1818,15 @@ class MainController:
         self.ui.label_32.setText(f"0/{total_runs}")
         await asyncio.sleep(0) # Ép giao diện render ngay lập tức trạng thái 0/x trước khi thuật toán chạy
 
-        xy_polygon_for_calc = []  # Khởi tạo biến ở đây
-
-        # Lấy vị trí HIỆN TẠI của UAV 1 làm trung tâm và điểm xuất phát
-        # thay vì vị trí khởi tạo trong config.
-        await self.telemetry_controller.uav_fn_get_position(1)
-        start_lat = self.UAVs[1].telemetry.latitude
-        start_lon = self.UAVs[1].telemetry.longitude
-
-        # Fallback to init_params if current position is not available
-        if not isinstance(start_lat, (int, float)) or not isinstance(start_lon, (int, float)):
-            self.view.popup_msg("Không lấy được vị trí hiện tại của UAV 1. Sử dụng vị trí khởi tạo.", "Simulation", "Warning")
-            start_lat = self.UAVs[1].config.init_params["latitude"]
-            start_lon = self.UAVs[1].config.init_params["longitude"]
-
-        start_coord = (start_lat, start_lon)
-        center_lat, center_lon = start_coord
+        start_positions = await self._get_sim_uav_start_positions(selected_uavs)
+        center_lat = sum(pos[0] for pos in start_positions.values()) / len(start_positions)
+        center_lon = sum(pos[1] for pos in start_positions.values()) / len(start_positions)
+        center_coord = (center_lat, center_lon)
+        self.view.update_terminal(
+            f"[SIM] Selected UAVs: {', '.join(f'UAV {uav}' for uav in selected_uavs)}. "
+            f"Splitting area into {len(selected_uavs)} parts.",
+            0,
+        )
 
         # 3. Generate mission area (polygon)
         try:
@@ -1727,11 +1843,6 @@ class MainController:
                 p3 = calculate_new_lat_lon(center_lat, center_lon, -half_side, half_side)  # Bottom-right
                 p4 = calculate_new_lat_lon(center_lat, center_lon, -half_side, -half_side) # Bottom-left
                 polygon_vertices = [p1, p2, p3, p4, p1] # Dùng để vẽ trên bản đồ
-                # Tạo hình vuông XY gốc để tính toán chính xác
-                xy_polygon_for_calc = [
-                    (-half_side, half_side), (half_side, half_side),
-                    (half_side, -half_side), (-half_side, -half_side)
-                ]
             elif map_type == "Rectangle":
                 width = self.ui.spinBox_6.value()
                 height = self.ui.spinBox_7.value()
@@ -1743,11 +1854,6 @@ class MainController:
                 p3 = calculate_new_lat_lon(center_lat, center_lon, -half_h, half_w) # Bottom-right
                 p4 = calculate_new_lat_lon(center_lat, center_lon, -half_h, -half_w)# Bottom-left
                 polygon_vertices = [p1, p2, p3, p4, p1] # Dùng để vẽ trên bản đồ
-                # Tạo hình chữ nhật XY gốc để tính toán chính xác
-                xy_polygon_for_calc = [
-                    (-half_w, half_h), (half_w, half_h),
-                    (half_w, -half_h), (-half_w, -half_h)
-                ]
             elif map_type == "Custom":
                 custom_polygons = self.view.geodata.get("Polygon", [])
                 if not custom_polygons:
@@ -1779,40 +1885,93 @@ class MainController:
                 if polygon_vertices[0] != polygon_vertices[-1]:
                     polygon_vertices.append(polygon_vertices[0])
 
-                xy_polygon_for_calc = convert_to_cartesian(polygon_vertices)
             else:
                 self.view.popup_msg(f"Map Type '{map_type}' is not implemented yet.", "Simulation", "Warning")
                 return
 
             self.view.sim_map.centerAt(center_lat, center_lon)
 
-            # Vẽ vùng bay lên bản đồ sim
-            self.view.sim_map.drawPolygon("sim_area", polygon_vertices, options={'color': 'blue', 'fillOpacity': 0.1})
+            split_result = self.view.split_area_for_mission(
+                polygon_vertices,
+                len(selected_uavs),
+                map_names=("sim",),
+                clear_existing=False,
+                store=False,
+                save_files=False,
+            )
 
             # VẼ LẠI DRONE LÊN BẢN ĐỒ SIMULATION SAU KHI BỊ XÓA
             self.view.update_drone_positions()
 
-            # 4. Generate grid points
-            # Use the center of the area as the reference for coordinate conversions
-            # to ensure consistency and avoid drift.
-            ref_lat, ref_lon = start_coord
+            if len(selected_uavs) == 1:
+                ref_lat, ref_lon = center_coord
+                cartesian_poly = [latlon_to_xy(ref_lat, ref_lon, lat, lon) for lat, lon in polygon_vertices]
+                grid_points_cartesian = generate_grid(cartesian_poly, grid_size)
+                grid_points_latlon = [
+                    calculate_new_lat_lon(ref_lat, ref_lon, p[1], p[0])
+                    for p in grid_points_cartesian
+                ]
+                grid_point_groups = [grid_points_latlon]
+            else:
+                grid_point_groups = split_grids(
+                    split_result["rotated_area_list"],
+                    *split_result["extra"],
+                    grid_size,
+                    len(selected_uavs),
+                )
 
-            # Convert polygon vertices from Lat/Lon to a local XY cartesian plane centered at the reference point.
-            # We use latlon_to_xy for a more consistent conversion relative to a center,
-            # instead of convert_to_cartesian which uses a corner of the polygon bounding box.
-            cartesian_poly = [latlon_to_xy(ref_lat, ref_lon, lat, lon) for lat, lon in polygon_vertices]
-
-            # Generate a grid of points within the cartesian polygon.
-            grid_points_cartesian = generate_grid(cartesian_poly, grid_size)
-
-            # Convert the cartesian grid points back to Lat/Lon using the same reference point.
-            # calculate_new_lat_lon is more accurate than the previous convert_to_lat_lon.
-            grid_points_latlon = [calculate_new_lat_lon(ref_lat, ref_lon, p[1], p[0]) for p in grid_points_cartesian]
-
-            if not grid_points_latlon or len(grid_points_latlon) < 2:
+            if not grid_point_groups:
                 self.view.popup_msg("Vùng sinh quá bé hoặc Grid Size quá lớn, không đủ tạo điểm bay!", "Simulation", "Warning")
                 self.view.update_terminal("[SIM] Simulation aborted: Not enough points.", 0)
                 return
+
+            if len(grid_point_groups) != len(selected_uavs):
+                self.view.popup_msg(
+                    "Không chia được đủ area cho số UAV đã chọn.",
+                    "Simulation",
+                    "Warning",
+                )
+                self.view.update_terminal(
+                    f"[SIM] Simulation aborted: expected {len(selected_uavs)} grid groups, got {len(grid_point_groups)}.",
+                    0,
+                )
+                return
+
+            grid_points_by_uav = {
+                uav_index: grid_point_groups[ind]
+                for ind, uav_index in enumerate(selected_uavs)
+            }
+            empty_uavs = [
+                uav_index
+                for uav_index, points in grid_points_by_uav.items()
+                if not points
+            ]
+            if empty_uavs:
+                self.view.popup_msg(
+                    "Grid Size quá lớn hoặc vùng quá nhỏ, một số UAV không có điểm bay.",
+                    "Simulation",
+                    "Warning",
+                )
+                self.view.update_terminal(
+                    f"[SIM] Simulation aborted: no grid points for {empty_uavs}.",
+                    0,
+                )
+                return
+
+            for uav_index, points in grid_points_by_uav.items():
+                for i, point in enumerate(points):
+                    marker_options = {
+                        'icon': str(DOT_ICON_PATH),
+                        'iconSize': {'width': 5, 'height': 5},
+                        'title': f'UAV {uav_index} Area Point {i + 1}',
+                        'name': 'sim_grid_pt_'
+                    }
+                    self.view.sim_map.addMarker(
+                        f"sim_grid_pt_uav{uav_index}_{i + 1}",
+                        point[0],
+                        point[1],
+                        **marker_options,
+                    )
 
         except Exception as e:
             self.view.popup_msg(f"Error generating map area/grid: {e}", "Simulation", "Error")
@@ -1843,15 +2002,13 @@ class MainController:
             "ACO": 4,
             "GA": 5,
             "GA_with_turn": 6,
-            "A*_Improved": 7
+            "ABC": 7,
+            "A*_Improved": 8
         }
 
         best_overall_score = float('inf')
         best_overall_path = None
         best_overall_algo = ""
-
-        # Lấy cao độ mặc định và tọa độ ban đầu của UAV 1
-        uav_alt = self.UAVs[1].config.init_params.get("altitude", 10.0)
 
         for algo_name in selected_algos:
             if algo_name not in algo_map:
@@ -1868,114 +2025,138 @@ class MainController:
                     self.view.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
                     await asyncio.sleep(0)
 
-                    # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC
-                    path = algo_map[algo_name](grid_points_latlon.copy(), start_coord)
-                    if not path:
-                        self.view.update_terminal(f"[SIM] Thuật toán {algo_name} không trả về đường đi. Bỏ qua.", 0)
-                        current_run += num_runs # Bỏ qua tất cả các lần chạy của thuật toán này
+                    # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC CHO TỪNG UAV ĐƯỢC CHỌN
+                    paths_by_uav = {}
+                    run_cost = 0
+                    run_dist = 0
+                    run_turns = 0
+                    run_coverage = 0
+
+                    for uav_index in selected_uavs:
+                        uav_area_points = grid_points_by_uav[uav_index]
+                        start_coord = start_positions[uav_index]
+                        path = algo_map[algo_name](uav_area_points.copy(), start_coord)
+                        if not path:
+                            self.view.update_terminal(
+                                f"[SIM] Thuật toán {algo_name} không trả về đường đi cho UAV {uav_index}. Bỏ qua lượt này.",
+                                0,
+                            )
+                            paths_by_uav = {}
+                            break
+
+                        path = self._ensure_path_starts_at_uav(path, start_coord)
+
+                        if reduce_points_enabled:
+                            original_point_count = len(path)
+                            path_start = path[0]
+                            reduced_grid_points = self.view.reduce_points_in_path(path[1:])
+                            path = [path_start] + reduced_grid_points
+                            reduced_point_count = len(path)
+                            self.view.update_terminal(
+                                f"[SIM] UAV {uav_index}: reduced path for {algo_name} "
+                                f"from {original_point_count} to {reduced_point_count} waypoints.",
+                                0,
+                            )
+
+                        analyzer = UAVAnalyzer(
+                            area_gps=polygon_vertices,
+                            flight_path=path,
+                            footprint_size=20.0,
+                        )
+                        analysis_result = analyzer.compute_coverage()
+
+                        run_cost += analysis_result.get("cost", 0)
+                        run_dist += analysis_result.get("distance_m", 0)
+                        run_turns += analysis_result.get("turns", 0)
+                        run_coverage += analysis_result.get("coverage_percent", 0) / 100.0
+                        paths_by_uav[uav_index] = path
+
+                    if not paths_by_uav:
+                        current_run += 1
                         self.ui.progressBar.setValue(current_run)
                         self.ui.label_32.setText(f"{current_run}/{total_runs}")
                         await asyncio.sleep(0)
                         continue
 
-                    if path and (abs(path[0][0] - start_coord[0]) > 1e-7 or abs(path[0][1] - start_coord[1]) > 1e-7):
-                        path.insert(0, start_coord)
+                    run_coverage = min(run_coverage, 1.0)
 
-                    # NEW: Reduce path if enabled, after path generation
-                    if reduce_points_enabled:
-                        original_point_count = len(path)
-                        path = reduce_path_collinear(path)
-                        reduced_point_count = len(path)
-                        self.view.update_terminal(f"[SIM] Reduced path for {algo_name} from {original_point_count} to {reduced_point_count} waypoints.", 0)
-
-                    # Chuyển đổi đường đi (lat, lon) sang (x, y) để tính toán
-                    ref_lat, ref_lon = start_coord
-                    # Giả sử path là list các tuple (lat, lon)
-                    xy_path = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in path])
-
-                    # --- Phân tích quỹ đạo hợp nhất ---
-                    analyzer = UAVAnalyzer(
-                        area_gps=polygon_vertices,
-                        flight_path=path,
-                        footprint_size=20.0 # Kích thước vùng quét của camera
-                    )
-                    analysis_result = analyzer.compute_coverage()
-
-                    # Lấy các giá trị của lượt chạy hiện tại
-                    cost = analysis_result.get("cost", 0)
-                    dist = analysis_result.get("distance_m", 0)
-                    turns = analysis_result.get("turns", 0)
-                    coverage = analysis_result.get("coverage_percent", 0) / 100.0
-
-                    # Cộng dồn các giá trị để tính trung bình
-                    total_cost += cost
-                    total_dist += dist
-                    total_turns += turns
-                    total_coverage += coverage
-                    current_best_path_for_algo = path
+                    total_cost += run_cost
+                    total_dist += run_dist
+                    total_turns += run_turns
+                    total_coverage += run_coverage
+                    current_best_path_for_algo = paths_by_uav
 
                     # --- DRAWING CURRENT PATH (MARKERS & POLYLINE) BEFORE SIM ---
-                    # Clear previous temporary path drawings (orange polyline)
-                    self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
-                    # Clear any existing temporary markers (e.g., from a previous run)
-                    self.view.sim_map.runScript("""
-                        if (typeof map !== 'undefined') {
-                            map.eachLayer(function (layer) {
-                                if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
-                                    map.removeLayer(layer);
-                                }
-                            });
-                        }
-                    """)
+                    self._clear_simulation_layers(include_grid=True)
                     # Draw current path markers, skipping the first point (UAV's start position)
                     # to avoid creating a "Point 0" marker. The polyline will connect from the UAV icon.
-                    for i, p in enumerate(path[1:]):
-                        marker_options = {
-                            'icon': str(DOT_ICON_PATH),
-                            'iconSize': {'width': 5, 'height': 5},
-                            'title': f'Point {i+1}',
-                            'name': 'sim_current_pt_' # Add a custom name for easier clearing
-                        }
-                        self.view.sim_map.addMarker(f"sim_current_pt_{i+1}", p[0], p[1], **marker_options)
+                    colors = ["orange", "red", "green", "blue", "purple", "brown"]
+                    plan_files_by_uav = {}
+                    for color_idx, uav_index in enumerate(selected_uavs):
+                        path = paths_by_uav[uav_index]
+                        for i, p in enumerate(path[1:]):
+                            marker_options = {
+                                'icon': str(DOT_ICON_PATH),
+                                'iconSize': {'width': 5, 'height': 5},
+                                'title': f'UAV {uav_index} - Point {i+1}',
+                                'name': 'sim_current_pt_'
+                            }
+                            self.view.sim_map.addMarker(
+                                f"sim_current_pt_uav{uav_index}_{i+1}",
+                                p[0],
+                                p[1],
+                                **marker_options,
+                            )
 
-                    # Draw current path polyline (blue to distinguish from orange temp line)
-                    self.view.sim_map.drawPolyLine("current_run_path_polyline", path, options={'color': 'orange', 'weight': 3, 'opacity': 0.7})
-                    # 2. XUẤT TỌA ĐỘ RA FILE
-                    sim_plan_file = os.path.join(__current_path__, "logs", "points", "simulation_path.txt")
-                    os.makedirs(os.path.dirname(sim_plan_file), exist_ok=True)
-                    with open(sim_plan_file, "w") as f:
-                        for pt in path:
-                            f.write(f"{pt[0]},{pt[1]},{uav_alt}\n")
+                        self.view.sim_map.drawPolyLine(
+                            f"current_run_path_polyline_uav{uav_index}",
+                            path,
+                            options={
+                                'color': colors[color_idx % len(colors)],
+                                'weight': 3,
+                                'opacity': 0.7,
+                                'name': 'current_run_path_polyline',
+                            },
+                        )
+
+                        sim_plan_file = os.path.join(
+                            __current_path__,
+                            "logs",
+                            "points",
+                            f"simulation_path_uav{uav_index}.txt",
+                        )
+                        os.makedirs(os.path.dirname(sim_plan_file), exist_ok=True)
+                        uav_alt = self.UAVs[uav_index].config.init_params.get("altitude", 10.0)
+                        with open(sim_plan_file, "w") as f:
+                            for pt in path:
+                                f.write(f"{pt[0]},{pt[1]},{uav_alt}\n")
+                        plan_files_by_uav[uav_index] = sim_plan_file
 
                     # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
-                    # Ghi nhận thời gian và pin trước khi cất cánh
+                    # Nạp mission và chạy đồng thời cho tất cả UAV được chọn.
                     start_time = time.time()
-                    batt_str = self.UAVs[1].telemetry.battery_percent
-                    start_battery = float(batt_str.replace('%', '')) if '%' in batt_str else 100.0
-                    # Kích hoạt chuyến bay khép kín (đợi cho tới khi nó hạ cánh hẳn mới đi tiếp)
-                    await self._run_single_sim_flight(1, sim_plan_file)
+                    sim_flight_tasks = [
+                        asyncio.create_task(self._run_single_sim_flight(uav_index, sim_plan_file))
+                        for uav_index, sim_plan_file in plan_files_by_uav.items()
+                    ]
+                    sim_flight_results = await asyncio.gather(*sim_flight_tasks, return_exceptions=True)
+                    for result in sim_flight_results:
+                        if isinstance(result, Exception):
+                            raise result
+                    flight_time = time.time() - start_time
+
                     # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
-                    self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
-                    self.view.sim_map.runScript("""
-                        if (typeof map !== 'undefined') {
-                            map.eachLayer(function (layer) {
-                                if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
-                                    map.removeLayer(layer);
-                                }
-                            });
-                        }
-                    """)
-                    # Ghi nhận thời gian và pin sau khi hạ cánh
-                    end_time = time.time()
-                    batt_str = self.UAVs[1].telemetry.battery_percent
-                    end_battery = float(batt_str.replace('%', '')) if '%' in batt_str else start_battery
-                    flight_time = end_time - start_time
+                    self._clear_simulation_layers()
                     # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
                     # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
-                    battery_drop = (flight_time * 0.15) + (turns * 0.05)
+                    battery_drop = (flight_time * 0.15) + (run_turns * 0.05)
                     total_flight_time += flight_time
                     total_battery_drop += battery_drop
-                    self.view.update_terminal(f"[SIM] Kết quả lượt {run_idx+1}: Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%", 0)
+                    self.view.update_terminal(
+                        f"[SIM] Kết quả lượt {run_idx+1}: {len(paths_by_uav)} UAV paths, "
+                        f"Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%",
+                        0,
+                    )
                     # 4. CẬP NHẬT GIAO DIỆN
                     current_run += 1
                     self.ui.progressBar.setValue(current_run)
@@ -2020,55 +2201,67 @@ class MainController:
                 continue
 
         # 6. HOÀN TẤT & VẼ KẾT QUẢ TỐT NHẤT LÊN BẢN ĐỒ
-        # Xoá đường màu cam nhạt để vẽ đường chính thức (đường tạm thời trước đây)
-        self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.color==='orange')map.removeLayer(l);});")
-        
-        # Clear all temporary markers and polylines that might still be present
-        self.view.sim_map.runScript("map.eachLayer(function(l){if(l.options&&l.options.name==='current_run_path_polyline')map.removeLayer(l);});")
-        self.view.sim_map.runScript("""
-            if (typeof map !== 'undefined') {
-                map.eachLayer(function (layer) {
-                    if (layer instanceof L.Marker && layer.options.name && layer.options.name.startsWith('sim_current_pt_')) {
-                        map.removeLayer(layer);
-                    }
-                });
-            }
-        """)
+        self._clear_simulation_layers(include_best=True)
 
         if best_overall_path:
-            # Redraw markers for the final, best path
-            for i, p in enumerate(best_overall_path):
-                marker_options = {
-                    'icon': str(DOT_ICON_PATH),
-                    'iconSize': {'width': 5, 'height': 5},
-                    'title': f'Point {i}',
-                    'name': 'sim_best_pt_' # Add a unique name for final best path markers
-                }
-                self.view.sim_map.addMarker(f"sim_best_pt_{i}", p[0], p[1], **marker_options)
+            colors = ["purple", "red", "green", "blue", "orange", "brown"]
+            for color_idx, (uav_index, path) in enumerate(best_overall_path.items()):
+                for i, p in enumerate(path):
+                    marker_options = {
+                        'icon': str(DOT_ICON_PATH),
+                        'iconSize': {'width': 5, 'height': 5},
+                        'title': f'UAV {uav_index} - Point {i}',
+                        'name': 'sim_best_pt_'
+                    }
+                    self.view.sim_map.addMarker(
+                        f"sim_best_pt_uav{uav_index}_{i}",
+                        p[0],
+                        p[1],
+                        **marker_options,
+                    )
 
-            self.view.sim_map.drawPolyLine("best_path", best_overall_path, options={'color': 'purple', 'weight': 5, 'name': 'best_path_polyline'})
+                self.view.sim_map.drawPolyLine(
+                    f"best_path_uav{uav_index}",
+                    path,
+                    options={
+                        'color': colors[color_idx % len(colors)],
+                        'weight': 5,
+                        'name': 'best_path_polyline',
+                    },
+                )
+
             self.view.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
             self.view.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
 
             # --- THÊM VÀO ĐỂ LƯU VÀ MỞ ẢNH KẾT QUẢ ---
             try:
                 self.view.update_terminal("[SIM] Generating and saving coverage analysis image...", 0)
-                final_analyzer = UAVAnalyzer(
-                    area_gps=polygon_vertices,
-                    flight_path=best_overall_path,
-                    footprint_size=20.0
-                )
                 # Tạo tên file ảnh duy nhất theo thời gian
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 image_path = os.path.join(__current_path__, "logs", "images", f"sim_result_{best_overall_algo}_{timestamp}.png")
                 os.makedirs(os.path.dirname(image_path), exist_ok=True)
-                
-                # Gọi hàm visualize để vẽ và lưu ảnh
-                final_analyzer.visualize(
-                    title=f"Coverage Analysis - {best_overall_algo}",
-                    save_path=image_path,
-                    show=False  # Không hiển thị cửa sổ matplotlib
+
+                final_path = next(iter(best_overall_path.values()))
+                final_analyzer = UAVAnalyzer(
+                    area_gps=polygon_vertices,
+                    flight_path=final_path,
+                    footprint_size=20.0
                 )
+
+                if len(best_overall_path) == 1:
+                    final_analyzer.visualize(
+                        title=f"Coverage Analysis - {best_overall_algo}",
+                        save_path=image_path,
+                        show=False
+                    )
+                else:
+                    final_analyzer.visualize_multi_paths(
+                        paths_by_label=best_overall_path,
+                        title=f"Multi-UAV Coverage Analysis - {best_overall_algo}",
+                        save_path=image_path,
+                        show=False
+                    )
+
                 self.view.update_terminal(f"[SIM] Saved analysis image to {os.path.relpath(image_path)}", 0)
                 # Tự động mở file ảnh
                 if sys.platform == "win32":
@@ -2087,11 +2280,13 @@ class MainController:
     async def _run_single_sim_flight(self, uav_index, plan_file):
         try:
             self.UAVs[uav_index].telemetry.on_mission = True
+            self.UAVs[uav_index].telemetry.mission_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
             if self.view.active_tab_index == uav_index:
                 self._set_pause_button_style("Pause")
                 
             # Khởi chạy progress bar bay
             progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
+            position_task = asyncio.create_task(self._track_uav_position_on_map(uav_index))
             
             # Task ngầm: Liên tục kiểm tra xem bay hết điểm chưa để bắn lệnh về
             async def auto_rtl_when_finished():
@@ -2112,7 +2307,7 @@ class MainController:
             await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
             
             # Hủy các task ngầm khi chuyến bay đã kết thúc và đợi chúng cleanup.
-            background_tasks = [rtl_task, progress_task]
+            background_tasks = [rtl_task, progress_task, position_task]
             for task in background_tasks:
                 if not task.done():
                     task.cancel()

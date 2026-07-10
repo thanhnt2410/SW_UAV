@@ -9,12 +9,15 @@ from .geometry import haversine, distance_between_points, distance, angle_betwee
 from .polygon_ops import point_on_line
 
 
-def find_zigzag_path(points, uav_init_point):
+def _split_zigzag_rows(points):
+    if len(points) <= 2:
+        return [points.copy()]
+
     i = 1
     j = 0
-    n = 100
-    sub_list = [[] for i in range(n)]
+    sub_list = [[] for _ in range(len(points))]
     sub_list[0].append(points[0])
+
     while i < len(points) - 1:
         if point_on_line(points[i-1], points[i], points[i+1]):
             sub_list[j].append(points[i])
@@ -26,23 +29,56 @@ def find_zigzag_path(points, uav_init_point):
             i += 2
     sub_list[j].append(points[-1])
 
-    points_on_row = [[] for i in range(j+1)] 
-    for i in range(j+1):
-        points_on_row[i] = sub_list[i]
+    return [row for row in sub_list[:j + 1] if row]
 
-    start_distance = distance_between_points(uav_init_point, points_on_row[0][0])
-    end_distance = distance_between_points(uav_init_point, points_on_row[0][-1])
-    if start_distance > end_distance:
-        for i in range(len(points_on_row)):
-            if i % 2 == 0:
-                points_on_row[i].reverse()
-    else:
-        for i in range(len(points_on_row)):
-            if i % 2 != 0:
-                points_on_row[i].reverse()
+
+def _zigzag_row_sequence(row_count, start_row, prefer_forward):
+    if prefer_forward:
+        return list(range(start_row, row_count)) + list(range(start_row - 1, -1, -1))
+    return list(range(start_row, -1, -1)) + list(range(start_row + 1, row_count))
+
+
+def _zigzag_candidate_from_rows(rows, row_sequence, first_row_reversed):
     final_path = []
-    for i in range(len(points_on_row)):
-        final_path.extend(points_on_row[i])
+    for i, row_index in enumerate(row_sequence):
+        row = rows[row_index].copy()
+        should_reverse = first_row_reversed if i % 2 == 0 else not first_row_reversed
+        if should_reverse:
+            row.reverse()
+        final_path.extend(row)
+    return final_path
+
+
+def _path_distance_from_start(path, start):
+    total = 0
+    curr = start
+    for point in path:
+        total += distance_between_points(curr, point)
+        curr = point
+    return total
+
+
+def find_zigzag_path(points, uav_init_point):
+    rows = _split_zigzag_rows(points)
+    if not rows:
+        return [], None
+
+    best_path = []
+    best_distance = float("inf")
+
+    for start_row in range(len(rows)):
+        for prefer_forward in (True, False):
+            row_sequence = _zigzag_row_sequence(len(rows), start_row, prefer_forward)
+            for first_row_reversed in (False, True):
+                candidate_path = _zigzag_candidate_from_rows(
+                    rows, row_sequence, first_row_reversed
+                )
+                candidate_distance = _path_distance_from_start(candidate_path, uav_init_point)
+                if candidate_distance < best_distance:
+                    best_distance = candidate_distance
+                    best_path = candidate_path
+
+    final_path = best_path
     start_point = final_path[0]
     return final_path, start_point
 
@@ -381,68 +417,76 @@ def astar_path_with_turns(points, start):
 
     return path
 
-def reduce_path_collinear(path):
-    if len(path) < 3:
-        return path
+def _same_point(p1, p2, tol=1e-9):
+    return abs(p1[0] - p2[0]) <= tol and abs(p1[1] - p2[1]) <= tol
 
-    reduced_path = [path[0]]
-    for i in range(1, len(path) - 1):
-        if not point_on_line(reduced_path[-1], path[i], path[i+1]):
-            reduced_path.append(path[i])
-    
-    reduced_path.append(path[-1])
-    
-    return reduced_path
+
+def _path_from_uav_start(path, uav_init_point):
+    """Ensure a candidate path is evaluated from the UAV's real start point."""
+    if not path:
+        return []
+
+    normalized_path = []
+    for point in path:
+        if not _same_point(point, uav_init_point):
+            normalized_path.append(point)
+
+    return [uav_init_point] + normalized_path
+
 
 def best_path_sw_uav(points, uav_init_point):
+    if not points:
+        return [uav_init_point]
+
     print("=== Running find_zigzag_path to get start point ===")
     zigzag_path, start_point = find_zigzag_path(points.copy(), uav_init_point)
-    print(f"Start point for all algorithms: {start_point}")
+    print(f"Nearest zigzag entry point: {start_point}")
+    print(f"UAV start point for all algorithms: {uav_init_point}")
 
     try:
-        path_find = find_path_0(points.copy(), start_point)
+        path_find = find_path_0(points.copy(), uav_init_point)
         if isinstance(path_find, tuple):
             path_find = path_find[0]
     except Exception:
         path_find = []
 
     try:
-        path_nn2opt = nn_2opt_path(points.copy(), start_point)
+        path_nn2opt = nn_2opt_path(points.copy(), uav_init_point)
     except Exception:
         path_nn2opt = []
 
     try:
-        path_sa = sa_path(points.copy(), start_point)
+        path_sa = sa_path(points.copy(), uav_init_point)
     except Exception:
         path_sa = []
 
     try:
-        path_aco = aco_path(points.copy(), start_point)
+        path_aco = aco_path(points.copy(), uav_init_point)
     except Exception:
         path_aco = []
 
     try:
-        path_ga = ga_path(points.copy(), start_point)
+        path_ga = ga_path(points.copy(), uav_init_point)
     except Exception:
         path_ga = []
 
     try:
-        path_abc = abc_path(points.copy(), start_point)
+        path_abc = abc_path(points.copy(), uav_init_point)
     except Exception:
         path_abc = []
 
     try:
-        path_ga_with_turns = ga_path_with_turns(points.copy(), start_point)
+        path_ga_with_turns = ga_path_with_turns(points.copy(), uav_init_point)
     except Exception:
         path_ga_with_turns = []
 
     try:
-        path_A = astar_path_with_turns(points.copy(), start_point)
+        path_A = astar_path_with_turns(points.copy(), uav_init_point)
     except Exception:
         path_A = []
 
     algos = {
-        "Zigzag": zigzag_path,
+        "Zigzag": _path_from_uav_start(zigzag_path, uav_init_point),
         "Find_Path": path_find,
         "NN_2opt": path_nn2opt,
         "SA": path_sa,
@@ -455,7 +499,7 @@ def best_path_sw_uav(points, uav_init_point):
 
     best_name = None
     best_cost_val = float("inf")
-    best_path = None
+    best_path = _path_from_uav_start(points.copy(), uav_init_point)
 
     ref_lat, ref_lon = uav_init_point
     xy_points = np.array([latlon_to_xy(ref_lat, ref_lon, p_lat, p_lon) for p_lat, p_lon in points])
@@ -470,6 +514,7 @@ def best_path_sw_uav(points, uav_init_point):
 
 
     for name, path in algos.items():
+        path = _path_from_uav_start(path, uav_init_point)
         if not path or len(path) < 2:
             print(f"Algorithm {name}: returned no valid path. Skipping.")
             continue
