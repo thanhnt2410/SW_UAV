@@ -1692,18 +1692,28 @@ class MainController:
             if widget.isChecked()
         ]
 
-    async def _get_sim_uav_start_positions(self, selected_uavs):
+    async def _get_sim_uav_start_positions(self, selected_uavs, use_current=True):
         start_positions = {}
         for uav_index in selected_uavs:
-            await self.telemetry_controller.uav_fn_get_position(uav_index)
-            start_lat = self.UAVs[uav_index].telemetry.latitude
-            start_lon = self.UAVs[uav_index].telemetry.longitude
+            if use_current:
+                await self.telemetry_controller.uav_fn_get_position(uav_index)
+                start_lat = self.UAVs[uav_index].telemetry.latitude
+                start_lon = self.UAVs[uav_index].telemetry.longitude
+            else:
+                start_lat = None
+                start_lon = None
 
             if not isinstance(start_lat, (int, float)) or not isinstance(start_lon, (int, float)):
-                self.view.update_terminal(
-                    f"[SIM] Không lấy được vị trí hiện tại UAV {uav_index}, dùng vị trí khởi tạo.",
-                    0,
-                )
+                if use_current:
+                    self.view.update_terminal(
+                        f"[SIM] Không lấy được vị trí hiện tại UAV {uav_index}, dùng vị trí khởi tạo.",
+                        0,
+                    )
+                else:
+                    self.view.update_terminal(
+                        f"[SIM] Planning-only: dùng vị trí khởi tạo của UAV {uav_index}.",
+                        0,
+                    )
                 start_lat = self.UAVs[uav_index].config.init_params["latitude"]
                 start_lon = self.UAVs[uav_index].config.init_params["longitude"]
 
@@ -1762,18 +1772,32 @@ class MainController:
             self.view.popup_msg("Vui lòng chọn ít nhất một UAV để chạy Simulation.", "Simulation", "Warning")
             return
 
-        disconnected_uavs = [
-            uav_index
-            for uav_index in selected_uavs
-            if not self._check_uav_connection(uav_index, strictly=True)
-        ]
+        map_type = self.ui.comboBox_3.currentText()
+        num_runs = self.ui.Num_run_2.value()
+        planning_only = num_runs == 0
+        if num_runs < 0:
+            self.view.update_terminal("[SIM] Simulation aborted: Runs per Algorithm must be 0 or greater.", 0)
+            self.view.popup_msg("Runs per Algorithm phải lớn hơn hoặc bằng 0.", "Simulation", "Warning")
+            return
+        run_iterations = 1 if planning_only else num_runs
+
+        disconnected_uavs = []
+        if not planning_only:
+            disconnected_uavs = [
+                uav_index
+                for uav_index in selected_uavs
+                if not self._check_uav_connection(uav_index, strictly=True)
+            ]
         if disconnected_uavs:
             uav_names = ", ".join(f"UAV {uav_index}" for uav_index in disconnected_uavs)
             self.view.update_terminal(f"[SIM] {uav_names} chưa connected. Simulation aborted.", 0)
             self.view.popup_msg(f"Vui lòng Connect {uav_names} trước khi chạy Simulation!", "Simulation", "Warning")
             return
 
-        self.view.update_terminal("[SIM] Starting simulation...", 0)
+        if planning_only:
+            self.view.update_terminal("[SIM] Planning-only mode: drawing path planning without UAV connection or flight.", 0)
+        else:
+            self.view.update_terminal("[SIM] Starting simulation...", 0)
 
         # 1. Clear only temporary simulation layers. Keep existing labels/areas/path
         # visible until their replacements are ready to draw.
@@ -1783,9 +1807,6 @@ class MainController:
         for row in range(self.ui.tableWidgetAlgorithmComparison.rowCount()):
             for col in range(1, self.ui.tableWidgetAlgorithmComparison.columnCount()):
                 self.ui.tableWidgetAlgorithmComparison.setItem(row, col, QtWidgets.QTableWidgetItem(""))
-        map_type = self.ui.comboBox_3.currentText()
-        num_runs = self.ui.Num_run_2.value()
-        if num_runs <= 0: num_runs = 1
         try:
             grid_size = float(self.ui.gridSize_line_edit.text()) # Lấy tạm grid size từ tab map
             if grid_size <= 0: grid_size = 10.0
@@ -1811,14 +1832,14 @@ class MainController:
             self.view.popup_msg("Please select at least one algorithm.", "Simulation", "Warning")
             return
 
-        total_runs = len(selected_algos) * num_runs
+        total_runs = len(selected_algos) * run_iterations
         current_run = 0
         self.ui.progressBar.setMaximum(total_runs)
         self.ui.progressBar.setValue(0)
         self.ui.label_32.setText(f"0/{total_runs}")
         await asyncio.sleep(0) # Ép giao diện render ngay lập tức trạng thái 0/x trước khi thuật toán chạy
 
-        start_positions = await self._get_sim_uav_start_positions(selected_uavs)
+        start_positions = await self._get_sim_uav_start_positions(selected_uavs, use_current=not planning_only)
         center_lat = sum(pos[0] for pos in start_positions.values()) / len(start_positions)
         center_lon = sum(pos[1] for pos in start_positions.values()) / len(start_positions)
         center_coord = (center_lat, center_lon)
@@ -1979,7 +2000,10 @@ class MainController:
             return
 
         # 5. Run algorithms and display results
-        self.view.update_terminal(f"[SIM] Running {len(selected_algos)} algorithms, {num_runs} runs each...", 0)
+        if planning_only:
+            self.view.update_terminal(f"[SIM] Planning paths for {len(selected_algos)} algorithms...", 0)
+        else:
+            self.view.update_terminal(f"[SIM] Running {len(selected_algos)} algorithms, {num_runs} runs each...", 0)
         await asyncio.sleep(0) # Nhường quyền cho event loop in log ra màn hình trước
 
         algo_map = {
@@ -2021,8 +2045,11 @@ class MainController:
             current_best_path_for_algo = []
 
             try:
-                for run_idx in range(num_runs): # type: ignore
-                    self.view.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
+                for run_idx in range(run_iterations): # type: ignore
+                    if planning_only:
+                        self.view.update_terminal(f"\n[SIM] === Planning {algo_name.replace('_', ' ')} ===", 0)
+                    else:
+                        self.view.update_terminal(f"\n[SIM] === Đang chạy {algo_name.replace('_', ' ')} - Lượt {run_idx+1}/{num_runs} ===", 0)
                     await asyncio.sleep(0)
 
                     # 1. TÍNH TOÁN ĐƯỜNG ĐI TOÁN HỌC CHO TỪNG UAV ĐƯỢC CHỌN
@@ -2132,48 +2159,57 @@ class MainController:
                                 f.write(f"{pt[0]},{pt[1]},{uav_alt}\n")
                         plan_files_by_uav[uav_index] = sim_plan_file
 
-                    # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
-                    # Nạp mission và chạy đồng thời cho tất cả UAV được chọn.
-                    start_time = time.time()
-                    sim_flight_tasks = [
-                        asyncio.create_task(self._run_single_sim_flight(uav_index, sim_plan_file))
-                        for uav_index, sim_plan_file in plan_files_by_uav.items()
-                    ]
-                    sim_flight_results = await asyncio.gather(*sim_flight_tasks, return_exceptions=True)
-                    for result in sim_flight_results:
-                        if isinstance(result, Exception):
-                            raise result
-                    flight_time = time.time() - start_time
+                    if planning_only:
+                        flight_time = 0
+                        battery_drop = 0
+                        self.view.update_terminal(
+                            f"[SIM] Planning-only: drew {len(paths_by_uav)} UAV paths for {algo_name}.",
+                            0,
+                        )
+                    else:
+                        # 3. ĐO LƯỜNG VÀ BAY MÔ PHỎNG THỰC TẾ
+                        # Nạp mission và chạy đồng thời cho tất cả UAV được chọn.
+                        start_time = time.time()
+                        sim_flight_tasks = [
+                            asyncio.create_task(self._run_single_sim_flight(uav_index, sim_plan_file))
+                            for uav_index, sim_plan_file in plan_files_by_uav.items()
+                        ]
+                        sim_flight_results = await asyncio.gather(*sim_flight_tasks, return_exceptions=True)
+                        for result in sim_flight_results:
+                            if isinstance(result, Exception):
+                                raise result
+                        flight_time = time.time() - start_time
 
-                    # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
-                    self._clear_simulation_layers()
-                    # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục) 
-                    # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
-                    battery_drop = (flight_time * 0.15) + (run_turns * 0.05)
+                        # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
+                        self._clear_simulation_layers()
+                        # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục)
+                        # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
+                        battery_drop = (flight_time * 0.15) + (run_turns * 0.05)
                     total_flight_time += flight_time
                     total_battery_drop += battery_drop
-                    self.view.update_terminal(
-                        f"[SIM] Kết quả lượt {run_idx+1}: {len(paths_by_uav)} UAV paths, "
-                        f"Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%",
-                        0,
-                    )
+                    if not planning_only:
+                        self.view.update_terminal(
+                            f"[SIM] Kết quả lượt {run_idx+1}: {len(paths_by_uav)} UAV paths, "
+                            f"Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%",
+                            0,
+                        )
                     # 4. CẬP NHẬT GIAO DIỆN
                     current_run += 1
                     self.ui.progressBar.setValue(current_run)
                     self.ui.label_32.setText(f"{current_run}/{total_runs}")
                     await asyncio.sleep(0)
-                    if current_run < total_runs:
+                    if current_run < total_runs and not planning_only:
                         self.view.update_terminal("[SIM] Đợi 5 giây làm nguội trước khi cất cánh lượt tiếp theo...", 0)
                         await asyncio.sleep(5)
 
                 # 5. TÍNH TRUNG BÌNH & ĐIỀN VÀO BẢNG TỔNG KẾT
-                if num_runs > 0:
-                    avg_cost = total_cost / num_runs
-                    avg_dist = total_dist / num_runs
-                    avg_turns = total_turns / num_runs
-                    avg_time = total_flight_time / num_runs
-                    avg_battery = total_battery_drop / num_runs
-                    avg_coverage = total_coverage / num_runs
+                if run_iterations > 0:
+                    avg_cost = total_cost / run_iterations
+                    avg_dist = total_dist / run_iterations
+                    avg_turns = total_turns / run_iterations
+                    avg_time = total_flight_time / run_iterations
+                    avg_battery = total_battery_drop / run_iterations
+                    avg_coverage = total_coverage / run_iterations
 
                     row = algo_to_row.get(algo_name)
                     if row is not None:
@@ -2230,8 +2266,12 @@ class MainController:
                     },
                 )
 
-            self.view.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
-            self.view.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
+            if planning_only:
+                self.view.update_terminal(f"\n[SIM] === HOÀN TẤT PATH PLANNING ===", 0)
+                self.view.update_terminal(f"[SIM] Path planning tốt nhất: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
+            else:
+                self.view.update_terminal(f"\n[SIM] === HOÀN TẤT MÔ PHỎNG MỌI THUẬT TOÁN ===", 0)
+                self.view.update_terminal(f"[SIM] Thuật toán tốt nhất thực tế: {best_overall_algo.replace('_', ' ')} (Score: {best_overall_score:.1f})", 0)
 
             # --- THÊM VÀO ĐỂ LƯU VÀ MỞ ẢNH KẾT QUẢ ---
             try:
@@ -2274,9 +2314,15 @@ class MainController:
                 self.view.update_terminal(f"[SIM] Error generating analysis image: {e}", 0)
             # --- KẾT THÚC PHẦN THÊM VÀO ---
 
-            self.view.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
+            if planning_only:
+                self.view.popup_msg(f"Path planning hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
+            else:
+                self.view.popup_msg(f"Mô phỏng hoàn tất!\nThuật toán tối ưu nhất: {best_overall_algo.replace('_', ' ')}", "Simulation", "Info")
         else:
-            self.view.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
+            if planning_only:
+                self.view.update_terminal("[SIM] Hoàn tất path planning nhưng không tìm thấy đường đi hợp lệ.", 0)
+            else:
+                self.view.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
     async def _run_single_sim_flight(self, uav_index, plan_file):
         try:
             self.UAVs[uav_index].telemetry.on_mission = True
