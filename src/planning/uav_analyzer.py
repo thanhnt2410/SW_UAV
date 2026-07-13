@@ -10,7 +10,6 @@ from pyproj.aoi import AreaOfInterest
 from pyproj.database import query_utm_crs_info
 from shapely.geometry import Polygon, LineString, MultiPolygon, mapping
 from shapely.ops import unary_union, transform as shapely_transform
-from shapely import BufferCapStyle, BufferJoinStyle
 import numpy as np
 
 
@@ -125,6 +124,24 @@ class UAVAnalyzer:
             [(x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h)]
         )
 
+    def _build_nominal_segment_strip(self, p1: XYPoint, p2: XYPoint) -> Optional[Polygon]:
+        """Build a width-2R strip whose area is segment_length * 2R."""
+        x1, y1 = p1
+        x2, y2 = p2
+        dx, dy = x2 - x1, y2 - y1
+        length = (dx ** 2 + dy ** 2) ** 0.5
+        if length == 0:
+            return None
+
+        nx, ny = -dy / length, dx / length
+        h = self._half_width
+        return Polygon([
+            (x1 + nx * h, y1 + ny * h),
+            (x2 + nx * h, y2 + ny * h),
+            (x2 - nx * h, y2 - ny * h),
+            (x1 - nx * h, y1 - ny * h),
+        ])
+
     def _build_path_footprint(self, path_xy: List[XYPoint]) -> Polygon:
         """Build the merged sweep footprint for the full path."""
         if not path_xy:
@@ -186,6 +203,44 @@ class UAVAnalyzer:
             **cost_metrics
         }
 
+    def compute_overlap_for_paths(self, flight_paths: List[List[GPSPoint]]) -> Dict[str, float]:
+        """Compute in-mission overlap, including overlap between multiple UAV paths."""
+        survey_polygon = self.build_survey_polygon()
+        paths_xy = [self._gps_list_to_xy(path) for path in flight_paths if path]
+        return self._calculate_overlap_metrics(paths_xy, survey_polygon)
+
+    def _calculate_overlap_metrics(self, paths_xy, survey_polygon) -> Dict[str, float]:
+        """Calculate repeated sweep area after clipping every strip to the mission."""
+        strips_inside = []
+        for path_xy in paths_xy:
+            for p1, p2 in zip(path_xy[:-1], path_xy[1:]):
+                strip = self._build_nominal_segment_strip(p1, p2)
+                if strip is None or strip.is_empty or not strip.is_valid:
+                    continue
+                strip_inside = strip.intersection(survey_polygon)
+                if not strip_inside.is_empty:
+                    strips_inside.append(strip_inside)
+
+        if not strips_inside:
+            return {
+                "swept_area_inside_m2": 0.0,
+                "unique_swept_area_inside_m2": 0.0,
+                "overlap_area_m2": 0.0,
+                "overlap_ratio": 0.0,
+            }
+
+        swept_area_inside = sum(strip.area for strip in strips_inside)
+        unique_swept_area_inside = unary_union(strips_inside).area
+        overlap_area = max(swept_area_inside - unique_swept_area_inside, 0.0)
+        mission_area = survey_polygon.area
+
+        return {
+            "swept_area_inside_m2": swept_area_inside,
+            "unique_swept_area_inside_m2": unique_swept_area_inside,
+            "overlap_area_m2": overlap_area,
+            "overlap_ratio": overlap_area / mission_area if mission_area > 0 else 0.0,
+        }
+
     def _calculate_cost_metrics(self, xy_path, xy_polygon, weights=(1.0, 0.02, 0.5)):
         """Calculate cost metrics for a flight path."""
         if xy_path is None or len(xy_path) < 2:
@@ -202,21 +257,11 @@ class UAVAnalyzer:
         j_turn = np.sum(d_heads)
         turn_count = np.sum(d_heads > np.radians(1.0))
 
-        polygon_area = xy_polygon.area
-        path_line = LineString(xy_path)
-        sweep_region = path_line.buffer(
-            self._half_width,
-            cap_style=BufferCapStyle.square,
-            join_style=BufferJoinStyle.mitre
-        )
-
-        total_strip_area = 0.0
-        for i in range(len(xy_path)-1):
-            segment = LineString([xy_path[i], xy_path[i+1]])
-            total_strip_area += segment.buffer(self._half_width).area
-
-        overlap_area = max(total_strip_area - sweep_region.area, 0.0)
-        overlap_ratio = overlap_area / max(polygon_area, 1e-9)
+        overlap_metrics = self._calculate_overlap_metrics([xy_path], xy_polygon)
+        overlap_ratio = overlap_metrics["overlap_ratio"]
+        # Nominal swept area: path length multiplied by the sensor/camera
+        # footprint width (2R). This intentionally includes overlapping sweeps.
+        swept_area = j_length * self.footprint_size
 
         j_total = weights[0] * j_turn + weights[1] * j_length + weights[2] * overlap_ratio
 
@@ -224,6 +269,8 @@ class UAVAnalyzer:
             "cost": j_total,
             "distance_m": j_length,
             "turns": turn_count,
+            "swept_area_m2": swept_area,
+            "overlap_area_m2": overlap_metrics["overlap_area_m2"],
             "overlap_ratio": overlap_ratio,
         }
 

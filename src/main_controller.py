@@ -2041,7 +2041,7 @@ class MainController:
             # Thêm total_overlap_ratio để tính toán giá trị mới
             total_cost, total_dist, total_turns, total_swept, total_coverage, total_overlap_ratio = 0, 0, 0, 0, 0, 0
             total_flight_time = 0
-            total_battery_drop = 0
+            total_energy_wh = 0
             current_best_path_for_algo = []
 
             try:
@@ -2057,7 +2057,9 @@ class MainController:
                     run_cost = 0
                     run_dist = 0
                     run_turns = 0
+                    run_swept = 0
                     run_coverage = 0
+                    run_overlap_ratio = 0
 
                     for uav_index in selected_uavs:
                         uav_area_points = grid_points_by_uav[uav_index]
@@ -2095,6 +2097,7 @@ class MainController:
                         run_cost += analysis_result.get("cost", 0)
                         run_dist += analysis_result.get("distance_m", 0)
                         run_turns += analysis_result.get("turns", 0)
+                        run_swept += analysis_result.get("swept_area_m2", 0)
                         run_coverage += analysis_result.get("coverage_percent", 0) / 100.0
                         paths_by_uav[uav_index] = path
 
@@ -2106,11 +2109,15 @@ class MainController:
                         continue
 
                     run_coverage = min(run_coverage, 1.0)
+                    overlap_result = analyzer.compute_overlap_for_paths(list(paths_by_uav.values()))
+                    run_overlap_ratio = overlap_result.get("overlap_ratio", 0)
 
                     total_cost += run_cost
                     total_dist += run_dist
                     total_turns += run_turns
+                    total_swept += run_swept
                     total_coverage += run_coverage
+                    total_overlap_ratio += run_overlap_ratio
                     current_best_path_for_algo = paths_by_uav
 
                     # --- DRAWING CURRENT PATH (MARKERS & POLYLINE) BEFORE SIM ---
@@ -2161,7 +2168,7 @@ class MainController:
 
                     if planning_only:
                         flight_time = 0
-                        battery_drop = 0
+                        energy_wh = 0
                         self.view.update_terminal(
                             f"[SIM] Planning-only: drew {len(paths_by_uav)} UAV paths for {algo_name}.",
                             0,
@@ -2180,17 +2187,28 @@ class MainController:
                                 raise result
                         flight_time = time.time() - start_time
 
+                        measured_energy = [result for result in sim_flight_results if result is not None]
+                        missing_measurements = len(sim_flight_results) - len(measured_energy)
+                        energy_wh = sum(measured_energy)
+                        if missing_measurements:
+                            # Only used if PX4 has not supplied valid voltage/current samples.
+                            # 120 W is a conservative x500 fallback; normal runs use measured V*I.
+                            fallback_wh = missing_measurements * 120.0 * flight_time / 3600.0
+                            energy_wh += fallback_wh
+                            self.view.update_terminal(
+                                f"[SIM] Cảnh báo: thiếu dữ liệu V/I của {missing_measurements} UAV; "
+                                f"dùng tải dự phòng 120 W ({fallback_wh:.3f} Wh).",
+                                0,
+                            )
+
                         # --- CLEARING CURRENT PATH DRAWINGS AFTER SIM ---
                         self._clear_simulation_layers()
-                        # Thay thế độ sụt pin thực tế (bị ảnh hưởng do bay liên tục)
-                        # Bằng công thức tính lý thuyết: 1 giây bay tốn ~0.15% pin, 1 lần quay đầu tốn thêm ~0.05%
-                        battery_drop = (flight_time * 0.15) + (run_turns * 0.05)
                     total_flight_time += flight_time
-                    total_battery_drop += battery_drop
+                    total_energy_wh += energy_wh
                     if not planning_only:
                         self.view.update_terminal(
                             f"[SIM] Kết quả lượt {run_idx+1}: {len(paths_by_uav)} UAV paths, "
-                            f"Thời gian = {flight_time:.1f}s, Tiêu hao pin = {battery_drop:.1f}%",
+                            f"Thời gian = {flight_time:.1f}s, Năng lượng = {energy_wh:.3f} Wh",
                             0,
                         )
                     # 4. CẬP NHẬT GIAO DIỆN
@@ -2207,23 +2225,25 @@ class MainController:
                     avg_cost = total_cost / run_iterations
                     avg_dist = total_dist / run_iterations
                     avg_turns = total_turns / run_iterations
+                    avg_swept = total_swept / run_iterations
                     avg_time = total_flight_time / run_iterations
-                    avg_battery = total_battery_drop / run_iterations
+                    avg_energy_wh = total_energy_wh / run_iterations
                     avg_coverage = total_coverage / run_iterations
+                    avg_overlap_ratio = total_overlap_ratio / run_iterations
 
                     row = algo_to_row.get(algo_name)
                     if row is not None:
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{avg_cost:.2f}"))
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{avg_coverage:.3f}"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 3, QtWidgets.QTableWidgetItem(f"N/A")) # Swept area cũ
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{avg_battery:.2f}%"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{avg_swept:.2f} m²"))
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{avg_energy_wh:.3f} Wh"))
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 5, QtWidgets.QTableWidgetItem(f"{avg_time:.1f} s"))
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 6, QtWidgets.QTableWidgetItem(f"{avg_dist:.2f} m"))
-                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 7, QtWidgets.QTableWidgetItem(f"N/A")) # Overlap cũ
+                        self.ui.tableWidgetAlgorithmComparison.setItem(row, 7, QtWidgets.QTableWidgetItem(f"{avg_overlap_ratio * 100:.2f}%"))
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 8, QtWidgets.QTableWidgetItem(f"{avg_turns:.1f}"))
                         
-                        # Tính điểm tổng hợp (Score): Kết hợp Cost thuật toán và Mức tiêu thụ mô phỏng thực tế
-                        score = avg_cost + (avg_time * 0.1) + (avg_battery * 10)
+                        # Score thấp hơn là tốt hơn; năng lượng là tổng Wh của cả đội UAV.
+                        score = avg_cost + (avg_time * 0.1) + (avg_energy_wh * 10)
                         self.ui.tableWidgetAlgorithmComparison.setItem(row, 9, QtWidgets.QTableWidgetItem(f"{score:.1f}"))
                         
                         # Cập nhật xem thuật toán nào đang vô địch về Score
@@ -2324,6 +2344,10 @@ class MainController:
             else:
                 self.view.update_terminal("[SIM] Hoàn tất mô phỏng nhưng không tìm thấy đường đi hợp lệ.", 0)
     async def _run_single_sim_flight(self, uav_index, plan_file):
+        background_tasks = []
+        energy_wh = 0.0
+        valid_energy_intervals = 0
+
         try:
             self.UAVs[uav_index].telemetry.on_mission = True
             self.UAVs[uav_index].telemetry.mission_start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2333,6 +2357,38 @@ class MainController:
             # Khởi chạy progress bar bay
             progress_task = asyncio.create_task(self.monitor_mission_progress(uav_index))
             position_task = asyncio.create_task(self._track_uav_position_on_map(uav_index))
+
+            try:
+                await self.UAVs[uav_index].system.telemetry.set_rate_battery(10.0)
+            except Exception as e:
+                self.logger.log(f"[SIM] UAV {uav_index}: cannot set battery rate: {e}", level="warning")
+
+            async def integrate_battery_energy():
+                nonlocal energy_wh, valid_energy_intervals
+                last_sample_time = None
+                async for battery in self.UAVs[uav_index].system.telemetry.battery():
+                    now = time.monotonic()
+                    voltage_v = getattr(battery, "voltage_v", float("nan"))
+                    current_a = getattr(battery, "current_battery_a", float("nan"))
+
+                    telemetry = self.UAVs[uav_index].telemetry
+                    telemetry.battery_voltage_v = voltage_v
+                    telemetry.battery_current_a = current_a
+                    telemetry.battery_consumed_ah = getattr(battery, "capacity_consumed_ah", None)
+                    remaining = getattr(battery, "remaining_percent", float("nan"))
+                    if np.isfinite(remaining):
+                        telemetry.battery_percent = f"{remaining * 100:.1f}%"
+
+                    if np.isfinite(voltage_v) and np.isfinite(current_a) and voltage_v > 0 and current_a >= 0:
+                        if last_sample_time is not None:
+                            dt_s = min(max(now - last_sample_time, 0.0), 2.0)
+                            energy_wh += voltage_v * current_a * dt_s / 3600.0
+                            valid_energy_intervals += 1
+                        last_sample_time = now
+                    else:
+                        last_sample_time = None
+
+            battery_task = asyncio.create_task(integrate_battery_energy())
             
             # Task ngầm: Liên tục kiểm tra xem bay hết điểm chưa để bắn lệnh về
             async def auto_rtl_when_finished():
@@ -2347,13 +2403,13 @@ class MainController:
                     await asyncio.sleep(1)
             
             rtl_task = asyncio.create_task(auto_rtl_when_finished())
+            background_tasks = [rtl_task, progress_task, position_task, battery_task]
             
             # Kích hoạt hàm cất cánh và bay (hàm uav_fn_do_mission sẽ tự động block cho đến khi UAV đáp đất hoàn toàn)
             self.view.update_terminal(f"[SIM] Bắt đầu nạp lộ trình và cất cánh UAV {uav_index}...", 0)
             await self.drone_service.uav_fn_do_mission(uav_index=uav_index, mission_plan_file=plan_file)
             
             # Hủy các task ngầm khi chuyến bay đã kết thúc và đợi chúng cleanup.
-            background_tasks = [rtl_task, progress_task, position_task]
             for task in background_tasks:
                 if not task.done():
                     task.cancel()
@@ -2377,10 +2433,19 @@ class MainController:
                 if not is_armed:
                     break
                 await asyncio.sleep(1)
+
+            return energy_wh if valid_energy_intervals > 0 else None
                 
         except Exception as e:
             self.view.update_terminal(f"[SIM] Lỗi trong chuyến bay: {e}", 0)
-            raise e
+            raise
+        finally:
+            for task in background_tasks:
+                if not task.done():
+                    task.cancel()
+            if background_tasks:
+                await asyncio.gather(*background_tasks, return_exceptions=True)
+            self.UAVs[uav_index].telemetry.on_mission = False
         
     # ------------------------------------< Rescue UAV 6 >-----------------------------
     # ? developing ...

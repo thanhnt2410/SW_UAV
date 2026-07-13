@@ -182,6 +182,9 @@ class DroneService:
     async def _get_battery(self, uav):
         async for b in uav.system.telemetry.battery():
             uav.telemetry.battery_percent = f"{round(b.remaining_percent * 100, 1)}%"
+            uav.telemetry.battery_voltage_v = b.voltage_v
+            uav.telemetry.battery_current_a = b.current_battery_a
+            uav.telemetry.battery_consumed_ah = b.capacity_consumed_ah
             break
 
     async def _get_arm_status(self, uav):

@@ -43,6 +43,9 @@ class UAVTelemetry:
     altitude_msl_m: Optional[float] = None
     
     battery_percent: str = "N/A"
+    battery_voltage_v: Optional[float] = None
+    battery_current_a: Optional[float] = None
+    battery_consumed_ah: Optional[float] = None
     gps_fix_type: str = "N/A"
     
     on_mission: bool = False
