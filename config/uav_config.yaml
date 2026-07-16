@@ -7,6 +7,42 @@ general:
   max_uav_count: 6
   rescue_uav_index: 6
 
+# Các tham số pin PX4 được tự động áp dụng qua MAVSDK sau khi kết nối.
+# Có thể cấu hình riêng theo operation_mode để tránh dùng nhầm thông số
+# pin mô phỏng cho UAV thật. Các giá trị dưới đây tương ứng pin LiPo 4S
+# 5000 mAh của model x500 (PX4 dùng 90% dung lượng danh định = 4500 mAh).
+px4_parameters:
+  simulation:
+    BAT1_SOURCE: 0
+    BAT1_N_CELLS: 4
+    BAT1_CAPACITY: 4500.0
+    BAT1_V_CHARGED: 4.05
+    BAT1_V_EMPTY: 3.60
+    BAT1_R_INTERNAL: 0.005
+  real: {}
+
+# Mô hình điện của pin/động cơ trong Gazebo. cmd/setup_px4.sh đọc phần này
+# và cài MotorPowerSystem vào model x500 khi chuẩn bị PX4 trên máy mới.
+gazebo_battery_model:
+  model: "x500"
+  battery_name: "linear_battery"
+  joint_names:
+    - "rotor_0_joint"
+    - "rotor_1_joint"
+    - "rotor_2_joint"
+    - "rotor_3_joint"
+  motor_constant: 8.54858e-06
+  moment_constant: 0.016
+  rotor_velocity_slowdown: 10.0
+  motor_efficiency: 0.82
+  static_power: 8.0
+  capacity: 5.0
+  initial_charge: 5.0
+  open_circuit_voltage_constant_coef: 16.8
+  open_circuit_voltage_linear_coef: -2.4
+  resistance: 0.02
+  smooth_current_tau: 0.5
+
 # Cấu hình cho từng UAV
 uavs:
   - id: 1
@@ -21,6 +57,8 @@ uavs:
       GND_SPEED_MAX: 2
       CURRENT_SPEED: 3
       RTL_AFTER_MS: true
+    # Tùy chọn: ghi đè px4_parameters chung cho riêng UAV này.
+    px4_parameters: {}
 
   - id: 2
     connection_allow: true
@@ -34,6 +72,7 @@ uavs:
       GND_SPEED_MAX: 2
       CURRENT_SPEED: 3
       RTL_AFTER_MS: true
+    px4_parameters: {}
 
   - id: 3
     connection_allow: true
@@ -47,6 +86,7 @@ uavs:
       GND_SPEED_MAX: 2
       CURRENT_SPEED: 3
       RTL_AFTER_MS: true
+    px4_parameters: {}
 
   - id: 4
     connection_allow: true
@@ -60,6 +100,7 @@ uavs:
       GND_SPEED_MAX: 2
       CURRENT_SPEED: 3
       RTL_AFTER_MS: true
+    px4_parameters: {}
 
   - id: 5
     connection_allow: true
@@ -73,6 +114,7 @@ uavs:
       GND_SPEED_MAX: 2
       CURRENT_SPEED: 3
       RTL_AFTER_MS: true
+    px4_parameters: {}
 
   - id: 6 # Rescue UAV
     connection_allow: true
@@ -86,6 +128,7 @@ uavs:
       GND_SPEED_MAX: 3
       CURRENT_SPEED: 20
       RTL_AFTER_MS: true
+    px4_parameters: {}
 
 # Cấu hình kết nối cho các chế độ
 connection:

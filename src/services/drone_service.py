@@ -40,6 +40,8 @@ class DroneService:
             uavs = {}
             for uav_conf in self.config.uav['uavs']:
                 idx = uav_conf["id"]
+                px4_parameters = dict(self.config.PX4_PARAMETERS)
+                px4_parameters.update(uav_conf.get("px4_parameters", {}) or {})
                 cfg = UAVConfig(
                     index=idx,
                     uav_id=idx,
@@ -54,7 +56,8 @@ class DroneService:
                         "latitude": self.config.init_pos[f"uav_{idx}"]["latitude"],
                         "altitude": uav_conf["init_alt"],
                     },
-                    overwrite_params=uav_conf["overwrite_params"]
+                    overwrite_params=uav_conf.get("overwrite_params", {}),
+                    px4_parameters=px4_parameters,
                 )
                 telemetry = UAVTelemetry()
                 uav = UAV(config=cfg, telemetry=telemetry)
@@ -109,7 +112,18 @@ class DroneService:
 
     async def _configure_uav_parameters(self, uav_index: int):
         """Configure UAV parameters after connection."""
-        
+
+        px4_parameters = self.uavs[uav_index].config.px4_parameters
+        if px4_parameters:
+            applied_parameters = await self.uav_fn_set_params(
+                uav_index=uav_index,
+                parameters=px4_parameters,
+            )
+            print(
+                f"[INFO] UAV-{uav_index}: Applied {len(applied_parameters)}/"
+                f"{len(px4_parameters)} PX4 parameters from uav_config.yaml"
+            )
+
         await self.uav_fn_overwrite_params(
             uav_index=uav_index, parameters=self.uavs[uav_index].config.overwrite_params
         )
@@ -332,12 +346,13 @@ class DroneService:
             print(f"Error getting parameters: {repr(e)}")
             return parameters
 
-    async def uav_fn_set_params(self, uav_index, parameters=None, param_file=None) -> None:
+    async def uav_fn_set_params(self, uav_index, parameters=None, param_file=None):
         """Set UAV parameters from a dict or a parameter file."""
         drone = self.get_uav(uav_index)
+        applied_parameters = {}
         if parameters is None and param_file is None:
             print("No parameters or parameter file provided")
-            return
+            return applied_parameters
     
         try:
             param_plugin = drone.system.param
@@ -351,18 +366,21 @@ class DroneService:
                 parameters = self.uav_fn_import_params(param_file)
                 if not parameters:
                     print(f"No valid parameters found in {param_file}")
-                    return
+                    return applied_parameters
     
             for param_name, param_value in parameters.items():
                 try:
                     if param_name in int_param_names:
                         await param_plugin.set_param_int(param_name, int(param_value))
+                        applied_parameters[param_name] = int(param_value)
                         
                     elif param_name in float_param_names:
                         await param_plugin.set_param_float(param_name, float(param_value))
+                        applied_parameters[param_name] = float(param_value)
                         
                     elif param_name in custom_param_names:
                         await param_plugin.set_param_custom(param_name, str(param_value))
+                        applied_parameters[param_name] = str(param_value)
                         
                     else:
                         print(f"Unknown parameter: {param_name}, skipping")
@@ -372,6 +390,8 @@ class DroneService:
                     
         except Exception as e:
             print(f"Error setting parameters: {repr(e)}")
+
+        return applied_parameters
 
     async def uav_fn_overwrite_params(self, uav_index, parameters) -> None:
         """Overwrite critical UAV flight parameters."""

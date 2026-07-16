@@ -29,14 +29,23 @@ Then, to install [Gazebo Harmonic (Gazebo Sim)](https://gazebosim.org/docs/harmo
 
 ### 3. [PX4-Autopilot](https://github.com/PX4/PX4-Autopilot.git)
 
-```
+```bash
 bash cmd/setup_px4.sh
 ```
 
-And check the results by:
+#### Gazebo battery and motor-power extension
 
-```
-./swam_uav.sh 
+`setup_px4.sh` tự cài `MotorPowerSystem`, nối dữ liệu pin vào `GZBridge` và
+build PX4. Thông số pin được chỉnh trong `config/uav_config.yaml` tại hai mục
+`gazebo_battery_model` và `px4_parameters`; không cần sửa source PX4.
+Chi tiết: [ENERGY_SIMULATION.md](px4_extensions/battery_power/ENERGY_SIMULATION.md).
+
+Sau khi đổi cấu hình, chạy lại `./swam_uav.sh` để tự đồng bộ và build. Kiểm tra
+dữ liệu bằng:
+
+```bash
+gz topic -e -n 1 -t /model/x500/motor_power
+gz topic -e -n 1 -t /model/x500/battery/linear_battery/state
 ```
 
 ### 7. [QGroundControl Ground Control Station](https://github.com/mavlink/qgroundcontrol/releases) (Optional)
@@ -102,4 +111,3 @@ UARTs
 ````
 
 ## Collaborators:
-

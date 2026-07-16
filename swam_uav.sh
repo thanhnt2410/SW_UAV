@@ -1,10 +1,16 @@
 #!/bin/bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 pkill -f px4
 pkill -f gz
 pkill -f gazebo
 pkill -f ruby
 
-cd ./dependencies/PX4-Autopilot
+python3 "${SCRIPT_DIR}/px4_extensions/battery_power/install.py" \
+    --px4-dir "${SCRIPT_DIR}/dependencies/PX4-Autopilot" \
+    --config "${SCRIPT_DIR}/config/uav_config.yaml"
+
+cd "${SCRIPT_DIR}/dependencies/PX4-Autopilot"
 gnome-terminal -- bash -c "make px4_sitl gz_x500; exec bash"
 sleep 10
 for i in {1..5}

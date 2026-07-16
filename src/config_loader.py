@@ -66,6 +66,9 @@ class ConfigLoader:
         self.MAX_UAV_COUNT = self.uav['general']['max_uav_count']
         self.RESCUE_UAV_INDEX = self.uav['general']['rescue_uav_index']
 
+        px4_parameters_by_mode = self.uav.get('px4_parameters', {})
+        self.PX4_PARAMETERS = dict(px4_parameters_by_mode.get(self.MODE, {}) or {})
+
         conn_conf = self.uav['connection'][self.MODE]
         self.PROTOCOLS = []
         self.SERVER_HOSTS = []

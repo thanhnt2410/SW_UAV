@@ -28,7 +28,8 @@ class UAVConfig:
     
     detection_model_path: Optional[str] = None
     init_params: Dict[str, Any] = field(default_factory=dict)
-    overwrite_params: bool = False
+    overwrite_params: Dict[str, Any] = field(default_factory=dict)
+    px4_parameters: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
