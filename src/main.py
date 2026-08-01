@@ -20,6 +20,10 @@ commands = []
 
 def run_commands():
 
+    if os.environ.get("SW_UAV_DOCKER") == "1":
+        subprocess.check_call("python3 src/app.py", shell=True)
+        return
+
     commands = [
         # "dependencies/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run.sh -n 6 -m iris",
         # "/home/thanh/ros_ws/SW-UAV/swam_uav.sh",

@@ -1,0 +1,27 @@
+services:
+  sw-uav:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: sw-uav:px4
+    container_name: sw-uav
+    working_dir: /app
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY}
+      QT_XCB_GL_INTEGRATION: none
+      QT_OPENGL: software
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      QT_X11_NO_MITSHM: "1"
+      XDG_RUNTIME_DIR: /tmp/runtime-root
+      YOLO_CONFIG_DIR: /tmp/Ultralytics
+      SW_UAV_DOCKER: "1"
+    volumes:
+      - ..:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
+    command: bash /app/docker/run-all.sh

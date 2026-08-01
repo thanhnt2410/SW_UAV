@@ -1,0 +1,12 @@
+node_modules
+dependencies/PX4-Autopilot
+dependencies/MAVSDK-Python
+logs
+cache
+__pycache__
+*.pyc
+*.log
+.git
+.agents
+.codex
+.vscode
