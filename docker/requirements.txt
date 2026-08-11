@@ -1,0 +1,41 @@
+# GUI
+PyQt5==5.15.*
+PyQtWebEngine==5.15.*
+geographiclib
+decorator
+
+# UAV
+mavsdk==3.15.3
+pymavlink==2.4.49
+pyserial==3.5
+
+# AI and video
+ultralytics==8.4.37
+opencv-python==4.13.0.92
+imutils==0.5.4
+
+# Maps and geometry
+folium==0.20.0
+shapely==2.1.2
+pyproj==3.7.1
+
+# Async GUI integration
+qasync==0.28.0
+asyncqt==0.8.0
+
+# Application utilities
+pygame==2.6.1
+pandas==2.3.3
+tqdm==4.67.3
+colorlog==6.10.1
+pyfiglet==1.0.4
+PyYAML
+numpy==2.2.6
+scipy==1.15.3
+sympy==1.14.0
+psutil
+py-cpuinfo
+Jinja2
+pytz
+matplotlib==3.10.9
+jsonschema

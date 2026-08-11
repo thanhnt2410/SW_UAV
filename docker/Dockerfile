@@ -1,44 +1,106 @@
-FROM px4io/px4-dev-simulation-jammy:2024-05-18
+FROM ubuntu:22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV QT_XCB_GL_INTEGRATION=none
-ENV PATH=/opt/conda/bin:${PATH}
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:${PATH} \
+    QT_XCB_GL_INTEGRATION=none \
+    QTWEBENGINE_DISABLE_SANDBOX=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    wget \
+# PX4 SITL build tools and runtime libraries for the PyQt/GStreamer application.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    astyle \
+    bc \
+    build-essential \
+    ca-certificates \
+    ccache \
+    cmake \
+    cppcheck \
+    curl \
+    file \
+    g++ \
+    gcc \
+    gdb \
     git \
-    python3 \
-    python3-pip \
+    gnupg \
+    lcov \
+    libasound2 \
+    libdbus-1-3 \
+    libfontconfig1 \
     libgl1 \
     libglib2.0-0 \
-    libxkbcommon-x11-0 \
-    libxcb-xinerama0 \
-    libxcb-cursor0 \
     libgstreamer-plugins-base1.0-dev \
+    libnss3 \
+    libssl-dev \
+    libx11-xcb1 \
+    libxcb-cursor0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-render-util0 \
+    libxcb-shape0 \
+    libxcb-xinerama0 \
+    libxcb-xkb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxkbcommon-x11-0 \
+    libxrandr2 \
+    libxml2-dev \
+    libxml2-utils \
+    libxtst6 \
+    lsb-release \
+    make \
+    ninja-build \
+    pkg-config \
+    python3 \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    rsync \
+    shellcheck \
+    unzip \
+    wget \
+    zip \
+    gstreamer1.0-libav \
     gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-ugly \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh \
-    && bash /tmp/miniforge.sh -b -p /opt/conda \
-    && rm /tmp/miniforge.sh \
-    && (conda config --remove channels defaults || true) \
-    && conda config --add channels conda-forge \
-    && conda config --set channel_priority strict
+# PX4 1.16+ uses Gazebo Harmonic (gz-sim8), distributed by OSRF for Jammy.
+RUN wget -q https://packages.osrfoundation.org/gazebo.gpg \
+        -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable jammy main" \
+        > /etc/apt/sources.list.d/gazebo-stable.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gz-harmonic libunwind-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY environment_basic.yml ./
+# PX4 Gazebo plugins use the OpenCV C++ SDK at configure and link time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopencv-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN conda env create -f environment_basic.yml \
-    && conda clean -afy
+RUN python3 -m venv "${VIRTUAL_ENV}" \
+    && python -m pip install --upgrade pip wheel
+
+# Copy requirement manifests first so source edits do not invalidate this layer.
+COPY docker/requirements.txt /tmp/app-requirements.txt
+COPY docker/requirements-px4.txt /tmp/px4-requirements.txt
+
+RUN python -m pip install -r /tmp/px4-requirements.txt \
+    && python -m pip install \
+        --index-url "${PYTORCH_INDEX_URL}" \
+        torch torchvision torchaudio \
+    && python -m pip install -r /tmp/app-requirements.txt
 
 COPY . .
 
-RUN echo 'if [ -f /opt/ros/humble/setup.bash ]; then source /opt/ros/humble/setup.bash; fi' >> /root/.bashrc \
-    && echo 'source /opt/conda/etc/profile.d/conda.sh' >> /root/.bashrc \
-    && echo 'conda activate uav' >> /root/.bashrc
-
-CMD ["conda", "run", "--no-capture-output", "-n", "uav", "python", "src/app.py"]
+CMD ["sleep", "infinity"]
