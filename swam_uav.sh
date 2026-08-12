@@ -53,7 +53,7 @@ if ! ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -Fxq "${NAME}"; then
         -w /app \
         --name "${NAME}" \
         "${IMAGE}" \
-        bash >/dev/null
+        zsh >/dev/null
 elif [ "$(${DOCKER_CMD} inspect -f '{{.State.Running}}' "${NAME}")" != "true" ]; then
     echo "[sw-uav] Starting existing container '${NAME}'..."
     ${DOCKER_CMD} start "${NAME}" >/dev/null
@@ -62,9 +62,9 @@ else
 fi
 
 echo "[sw-uav] Preparing PX4 workspace inside Docker..."
-${DOCKER_CMD} exec "${NAME}" git config --global --add safe.directory /app/dependencies/PX4-Autopilot || true
+${DOCKER_CMD} exec "${NAME}" git config --global --add safe.directory '*' || true
 
-${DOCKER_CMD} exec "${NAME}" bash -lc "
+${DOCKER_CMD} exec "${NAME}" zsh -lc "
     pkill -x px4 || true
     pkill -x gz || true
     pkill -x gazebo || true
@@ -76,14 +76,14 @@ ${DOCKER_CMD} exec "${NAME}" bash -lc "
 
 echo "[sw-uav] PX4 workspace is ready."
 echo "[sw-uav] Opening PX4 main terminal..."
-gnome-terminal --title="PX4 main" -- bash -c "${DOCKER_CMD} exec -it ${NAME} bash -lc 'cd /app/dependencies/PX4-Autopilot && make px4_sitl gz_x500'; exec bash"
+gnome-terminal --title="PX4 main" -- bash -c "${DOCKER_CMD} exec -it ${NAME} zsh -lc 'cd /app/dependencies/PX4-Autopilot && make px4_sitl gz_x500; exec zsh'"
 sleep 10
 
 for i in {1..5}
 do
     pose="$((i*3)),0,0.3,0,0,0"
     echo "[sw-uav] Opening PX4 UAV ${i} terminal..."
-    gnome-terminal --title="PX4 UAV ${i}" -- bash -c "${DOCKER_CMD} exec -it ${NAME} bash -lc 'cd /app/dependencies/PX4-Autopilot && PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 PX4_GZ_MODEL_POSE=\"${pose}\" ./build/px4_sitl_default/bin/px4 -i ${i}'; exec bash"
+    gnome-terminal --title="PX4 UAV ${i}" -- bash -c "${DOCKER_CMD} exec -it ${NAME} zsh -lc 'cd /app/dependencies/PX4-Autopilot && PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 PX4_GZ_MODEL_POSE=\"${pose}\" ./build/px4_sitl_default/bin/px4 -i ${i}; exec zsh'"
     sleep 1
 done
 

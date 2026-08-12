@@ -111,6 +111,32 @@ RUN python -m pip install -r /tmp/px4-requirements.txt \
         torch torchvision torchaudio \
     && python -m pip install -r /tmp/app-requirements.txt
 
+# Keep frequently tweaked interactive-shell tooling after the heavy dependency
+# layers so prompt/theme changes do not invalidate the PX4/Gazebo/Python cache.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zsh \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN printf '%s\n' \
+    'export SW_UAV_IN_DOCKER=1' \
+    'export PROMPT_DIRTRIM=3' \
+    'export PS1="\[\033[1;36m\][SW-UAV docker]\[\033[0m\] \[\033[1;33m\]\w\[\033[0m\] \$ "' \
+    > /etc/bash.bashrc.docker-prompt \
+    && printf '%s\n' \
+    '' \
+    'if [ -f /etc/bash.bashrc.docker-prompt ]; then' \
+    '    . /etc/bash.bashrc.docker-prompt' \
+    'fi' \
+    >> /etc/bash.bashrc \
+    && printf '%s\n' \
+    'export SW_UAV_IN_DOCKER=1' \
+    'PROMPT="%F{cyan}[SW-UAV docker]%f %F{yellow}%3~%f %# "' \
+    'alias ll="ls -alF"' \
+    'alias px4dir="cd /app/dependencies/PX4-Autopilot"' \
+    > /root/.zshrc
+
+RUN git config --global --add safe.directory '*'
+
 COPY . .
 
 CMD ["sleep", "infinity"]

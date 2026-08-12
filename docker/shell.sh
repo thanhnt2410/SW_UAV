@@ -24,10 +24,10 @@ if ! sudo docker ps -a --format '{{.Names}}' | grep -Fxq "${NAME}"; then
         -w /app \
         --name "${NAME}" \
         "${IMAGE}" \
-        bash >/dev/null
+        zsh >/dev/null
 elif [ "$(sudo docker inspect -f '{{.State.Running}}' "${NAME}")" != "true" ]; then
     sudo docker start "${NAME}" >/dev/null
 fi
 
-sudo docker exec "${NAME}" git config --global --add safe.directory /app/dependencies/PX4-Autopilot
-sudo docker exec -it "${NAME}" bash
+sudo docker exec "${NAME}" git config --global --add safe.directory '*'
+sudo docker exec -it "${NAME}" zsh
