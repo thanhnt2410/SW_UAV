@@ -1,57 +1,90 @@
 #!/bin/bash
+set -e
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE="${SW_UAV_IMAGE:-sw-uav:latest}"
+NAME="${SW_UAV_CONTAINER:-sw-uav}"
+DOCKER_CMD="${SW_UAV_DOCKER_CMD:-docker}"
+
+echo "[sw-uav] Host launcher started"
+echo "[sw-uav] Project: ${SCRIPT_DIR}"
 
 if [ -f /.dockerenv ]; then
-    export SW_UAV_DOCKER=1
+    echo "Run this script on the host machine, not inside the Docker container."
+    exit 1
 fi
 
-pkill -f px4
-pkill -f gz
-pkill -f gazebo
-pkill -f ruby
-
-if [ "${SW_UAV_DOCKER:-}" = "1" ]; then
-    git config --global --add safe.directory "${SCRIPT_DIR}/dependencies/PX4-Autopilot" || true
+if ! command -v gnome-terminal >/dev/null 2>&1; then
+    echo "[sw-uav] gnome-terminal is not installed or not available in PATH."
+    exit 1
 fi
 
-python3 "${SCRIPT_DIR}/px4_extensions/battery_power/install.py" \
-    --px4-dir "${SCRIPT_DIR}/dependencies/PX4-Autopilot" \
-    --config "${SCRIPT_DIR}/config/uav_config.yaml"
-
-cd "${SCRIPT_DIR}/dependencies/PX4-Autopilot"
-
-if [ "${SW_UAV_DOCKER:-}" = "1" ]; then
-    LOG_DIR="${SCRIPT_DIR}/logs/docker"
-    mkdir -p "${LOG_DIR}"
-
-    echo "[docker] PX4/Gazebo logs:"
-    echo "[docker]   ${LOG_DIR}/px4-main.log"
-    echo "[docker]   ${LOG_DIR}/px4-uav-1.log ... ${LOG_DIR}/px4-uav-5.log"
-
-    make px4_sitl gz_x500 > "${LOG_DIR}/px4-main.log" 2>&1 &
-    sleep 10
-    for i in {1..5}
-    do
-        PX4_GZ_STANDALONE=1 \
-        PX4_SYS_AUTOSTART=4001 \
-        PX4_GZ_MODEL=x500 \
-        PX4_GZ_MODEL_POSE="$((i*3)),0,0.3,0,0,0" \
-        ./build/px4_sitl_default/bin/px4 -i "$i" > "${LOG_DIR}/px4-uav-${i}.log" 2>&1 &
-        sleep 1
-    done
-    exit 0
+echo "[sw-uav] Checking Docker access..."
+if ! ${DOCKER_CMD} ps >/dev/null 2>&1; then
+    echo "[sw-uav] Docker needs sudo. You may be asked for your password."
+    sudo -v
+    if sudo docker ps >/dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
+    else
+        echo "Cannot access Docker. Start Docker or set SW_UAV_DOCKER_CMD."
+        exit 1
+    fi
 fi
 
-gnome-terminal -- bash -c "make px4_sitl gz_x500; exec bash"
+echo "[sw-uav] Using Docker command: ${DOCKER_CMD}"
+
+xhost +local:docker >/dev/null 2>&1 || true
+xhost +local:root >/dev/null 2>&1 || true
+
+if ! ${DOCKER_CMD} ps -a --format '{{.Names}}' | grep -Fxq "${NAME}"; then
+    echo "[sw-uav] Container '${NAME}' not found. Creating it from image '${IMAGE}'..."
+    ${DOCKER_CMD} run -dit \
+        --gpus all \
+        --net=host \
+        --ipc=host \
+        -e DISPLAY="${DISPLAY:-:0}" \
+        -e QT_X11_NO_MITSHM=1 \
+        -e QT_XCB_GL_INTEGRATION=xcb_glx \
+        -e __GLX_VENDOR_LIBRARY_NAME=nvidia \
+        -e NVIDIA_VISIBLE_DEVICES=all \
+        -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video,display \
+        -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+        -v "${SCRIPT_DIR}:/app" \
+        -w /app \
+        --name "${NAME}" \
+        "${IMAGE}" \
+        bash >/dev/null
+elif [ "$(${DOCKER_CMD} inspect -f '{{.State.Running}}' "${NAME}")" != "true" ]; then
+    echo "[sw-uav] Starting existing container '${NAME}'..."
+    ${DOCKER_CMD} start "${NAME}" >/dev/null
+else
+    echo "[sw-uav] Container '${NAME}' is already running."
+fi
+
+echo "[sw-uav] Preparing PX4 workspace inside Docker..."
+${DOCKER_CMD} exec "${NAME}" git config --global --add safe.directory /app/dependencies/PX4-Autopilot || true
+
+${DOCKER_CMD} exec "${NAME}" bash -lc "
+    pkill -x px4 || true
+    pkill -x gz || true
+    pkill -x gazebo || true
+    pkill -x ruby || true
+    python3 /app/px4_extensions/battery_power/install.py \
+        --px4-dir /app/dependencies/PX4-Autopilot \
+        --config /app/config/uav_config.yaml
+"
+
+echo "[sw-uav] PX4 workspace is ready."
+echo "[sw-uav] Opening PX4 main terminal..."
+gnome-terminal --title="PX4 main" -- bash -c "${DOCKER_CMD} exec -it ${NAME} bash -lc 'cd /app/dependencies/PX4-Autopilot && make px4_sitl gz_x500'; exec bash"
 sleep 10
+
 for i in {1..5}
 do
-    gnome-terminal -- bash -c "
-    PX4_GZ_STANDALONE=1 \
-    PX4_SYS_AUTOSTART=4001 \
-    PX4_GZ_MODEL=x500 \
-    PX4_GZ_MODEL_POSE="$((i*3)),0,0.3,0,0,0" \
-    ./build/px4_sitl_default/bin/px4 -i $i;
+    pose="$((i*3)),0,0.3,0,0,0"
+    echo "[sw-uav] Opening PX4 UAV ${i} terminal..."
+    gnome-terminal --title="PX4 UAV ${i}" -- bash -c "${DOCKER_CMD} exec -it ${NAME} bash -lc 'cd /app/dependencies/PX4-Autopilot && PX4_GZ_STANDALONE=1 PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL=x500 PX4_GZ_MODEL_POSE=\"${pose}\" ./build/px4_sitl_default/bin/px4 -i ${i}'; exec bash"
     sleep 1
-    exec bash"
 done
+
+echo "[sw-uav] Done. PX4 terminals were launched."

@@ -1,14 +1,6 @@
-FROM ubuntu:22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
-ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:${PATH} \
-    QT_XCB_GL_INTEGRATION=none \
-    QTWEBENGINE_DISABLE_SANDBOX=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
@@ -32,13 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libdbus-1-3 \
     libfontconfig1 \
+    libegl1 \
     libgl1 \
+    libgles2 \
     libglib2.0-0 \
+    libglvnd0 \
     libgstreamer-plugins-base1.0-dev \
+    libglx0 \
     libnss3 \
     libssl-dev \
     libx11-xcb1 \
     libxcb-cursor0 \
+    libxcb-glx0 \
     libxcb-icccm4 \
     libxcb-image0 \
     libxcb-keysyms1 \
@@ -56,12 +53,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 \
     lsb-release \
     make \
+    mesa-utils \
     ninja-build \
     pkg-config \
     python3 \
     python3-dev \
     python3-pip \
     python3-venv \
+    libqt5svg5 \
     rsync \
     shellcheck \
     unzip \
@@ -87,6 +86,17 @@ RUN wget -q https://packages.osrfoundation.org/gazebo.gpg \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libopencv-dev \
     && rm -rf /var/lib/apt/lists/*
+
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:${PATH} \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video,display \
+    QT_XCB_GL_INTEGRATION=xcb_glx \
+    QTWEBENGINE_DISABLE_SANDBOX=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
 
 RUN python3 -m venv "${VIRTUAL_ENV}" \
     && python -m pip install --upgrade pip wheel
