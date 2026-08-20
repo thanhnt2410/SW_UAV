@@ -65,6 +65,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     shellcheck \
     unzip \
     wget \
+    xfce4-terminal \
+    xterm \
     zip \
     gstreamer1.0-libav \
     gstreamer1.0-plugins-bad \

@@ -1,0 +1,2 @@
+run_id,repeat_index,angle_deg,angle_rad,speed_m_s,turn_radius_m,arc_length_m,pre_length_m,post_length_m,total_distance_m,measured_time_s,measured_energy_wh,turn_time_s,turn_energy_wh,mean_power_w,battery_voltage_mean_v,battery_current_mean_a,valid_energy_intervals,sample_count,valid
+2c2378de_01_90,1,90.0,1.5707963267948966,2.5,5.0,7.853981633974483,30.0,30.0,67.85398163397448,33.281273670000246,2.8848924057491905,,,312.4167910405943,16.337478253934478,19.12276235357061,332,333,True

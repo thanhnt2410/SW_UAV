@@ -9,16 +9,68 @@ including starting servers in new terminal windows and managing process lifecycl
 
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import psutil
 
 # Path to the MAVSDK server executable
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MAVSDK_SERVER_PATH = Path(f"{ROOT_DIR}/dependencies/MAVSDK-Python/mavsdk/bin/mavsdk_server")
+
+
+def is_running_in_docker() -> bool:
+    """Check if the current process is running inside a Docker container."""
+    return (
+        os.environ.get("SW_UAV_DOCKER") == "1"
+        or os.environ.get("SW_UAV_IN_DOCKER") == "1"
+        or Path("/.dockerenv").exists()
+    )
+
+
+def detect_terminal_emulator(preferred: Optional[str] = None) -> str:
+    """
+    Detect the appropriate terminal emulator.
+    - If running directly on host machine: prefer gnome-terminal (fallback to xfce4-terminal, xterm).
+    - If running inside Docker: prefer xfce4-terminal (fallback to xterm, gnome-terminal).
+    """
+    if preferred and shutil.which(preferred):
+        return preferred
+
+    in_docker = is_running_in_docker()
+    candidates = (
+        ["xfce4-terminal", "xterm", "gnome-terminal", "tilix", "alacritty", "konsole"]
+        if in_docker
+        else ["gnome-terminal", "xfce4-terminal", "xterm", "tilix", "alacritty", "konsole"]
+    )
+
+    for term in candidates:
+        if shutil.which(term):
+            return term
+
+    return "xfce4-terminal" if in_docker else "gnome-terminal"
+
+
+def build_terminal_args(terminal_type: str, title: str, inner_command: str) -> List[str]:
+    """
+    Build argument list to launch inner_command in the specified terminal emulator.
+    Using a list avoids shell quote escaping issues.
+    """
+    bash_script = f"cd '{ROOT_DIR}' && {inner_command}; exec /bin/bash"
+
+    if "gnome-terminal" in terminal_type or "tilix" in terminal_type:
+        return [terminal_type, f"--title={title}", "--", "/bin/bash", "-c", bash_script]
+    elif "xfce4-terminal" in terminal_type:
+        return [terminal_type, f"--title={title}", "-x", "/bin/bash", "-c", bash_script]
+    elif "xterm" in terminal_type:
+        return [terminal_type, "-T", title, "-e", "/bin/bash", "-c", bash_script]
+    elif "konsole" in terminal_type:
+        return [terminal_type, "--title", title, "-e", "/bin/bash", "-c", bash_script]
+    else:
+        return [terminal_type, "-e", "/bin/bash", "-c", bash_script]
 
 
 def kill_process_tree(pid: int) -> None:
@@ -87,7 +139,7 @@ class MAVSDKServer:
         port: int, 
         bind_port: int,
         use_terminal: bool = True,
-        terminal_type: str = "gnome-terminal"
+        terminal_type: Optional[str] = None
     ):
         """
         Initialize a MAVSDK server manager.
@@ -99,7 +151,7 @@ class MAVSDKServer:
             port: MAVSDK server port
             bind_port: Vehicle connection port
             use_terminal: Whether to launch in a separate terminal window
-            terminal_type: Terminal emulator to use (gnome-terminal, xterm, etc.)
+            terminal_type: Terminal emulator to use (auto-detected if None)
         """
         self.id = id
         self.protocol = protocol
@@ -107,7 +159,7 @@ class MAVSDKServer:
         self.port = port
         self.bind_port = bind_port
         self.use_terminal = use_terminal
-        self.terminal_type = terminal_type
+        self.terminal_type = detect_terminal_emulator(terminal_type)
         self.process = None
         
         # Build command based on whether MAVSDK server binary exists
@@ -126,14 +178,13 @@ class MAVSDKServer:
             f"[INFO] Starting MAVSDK server {id} with {connection_url} -p {port}"
         )
         
-        # Terminal command if using terminal
+        # Build command args
         if use_terminal:
-            self.shell_cmd = (
-                f"{terminal_type} -- /bin/bash -c "
-                f"'echo {self.init_msg}; sleep 1; {self.command}; exec /bin/bash' &"
-            )
+            title = f"MAVSDK Server UAV {id}"
+            inner_cmd = f'echo "{self.init_msg}" && sleep 1 && {self.command}'
+            self.cmd_args = build_terminal_args(self.terminal_type, title, inner_cmd)
         else:
-            self.shell_cmd = self.command
+            self.cmd_args = shlex.split(self.command)
 
     def start(self) -> None:
         """
@@ -142,21 +193,20 @@ class MAVSDKServer:
         Launches the server either in a new terminal window or as a background process.
         """
         try:
-            print(self.init_msg)
+            print(f"{self.init_msg} (terminal: {self.terminal_type if self.use_terminal else 'headless'})")
             
-            # Start process with appropriate redirections
+            # Start process directly with argument list
             self.process = subprocess.Popen(
-                self.shell_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE if not self.use_terminal else subprocess.DEVNULL,
-                stderr=subprocess.PIPE if not self.use_terminal else subprocess.DEVNULL,
-                shell=True,
+                self.cmd_args,
+                stdin=subprocess.PIPE if not self.use_terminal else None,
+                stdout=subprocess.PIPE if not self.use_terminal else None,
+                stderr=subprocess.PIPE if not self.use_terminal else None,
                 start_new_session=True  # Prevent SIGINT from parent process
             )
             
         except Exception as e:
             print(f"Failed to start MAVSDK server {self.id}: {e}")
-            print(f"Command was: {self.command}")
+            print(f"Command was: {self.cmd_args}")
 
     def stop(self) -> None:
         """
@@ -168,24 +218,32 @@ class MAVSDKServer:
             # If we have a direct process reference
             if self.process and self.process.pid:
                 # Kill the process group to ensure all child processes are terminated
-                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                try:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 
                 # Wait briefly for graceful shutdown
                 try:
                     self.process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    # Force kill if necessary
-                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                    try:
+                        os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
             
-            # If using terminal, we need to find and kill the terminal process
+            # If using terminal, also find and kill any matching processes
             if self.use_terminal:
-                # Get the shell command args
-                shell_args = shlex.split(self.shell_cmd)[2:-1]
-                
-                # Find and kill matching processes
-                matching_pids = get_pids_by_cmdline(shell_args)
-                for pid in matching_pids:
-                    kill_process_tree(pid)
+                for proc in psutil.process_iter(['pid', 'cmdline']):
+                    try:
+                        cmdline = proc.info.get('cmdline') or []
+                        # Check if process relates to this UAV's MAVSDK server or terminal
+                        if any(f"mavsdk_server_shell.py" in arg for arg in cmdline) and any(f"-p {self.port}" in " ".join(cmdline) or f"-i {self.id}" in " ".join(cmdline) for arg in cmdline):
+                            kill_process_tree(proc.info['pid'])
+                        elif any("mavsdk_server" in arg for arg in cmdline) and any(f"-p {self.port}" in " ".join(cmdline) for arg in cmdline):
+                            kill_process_tree(proc.info['pid'])
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
                     
         except Exception as e:
             print(f"Error stopping MAVSDK server {self.id}: {e}")
