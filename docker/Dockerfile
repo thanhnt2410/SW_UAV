@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -110,7 +110,10 @@ COPY docker/requirements-px4.txt /tmp/px4-requirements.txt
 RUN python -m pip install -r /tmp/px4-requirements.txt \
     && python -m pip install \
         --index-url "${PYTORCH_INDEX_URL}" \
-        torch torchvision torchaudio \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.6.0+cu124 \
+        torchvision==0.21.0+cu124 \
+        torchaudio==2.6.0+cu124 \
     && python -m pip install -r /tmp/app-requirements.txt
 
 # Keep frequently tweaked interactive-shell tooling after the heavy dependency
