@@ -53,12 +53,19 @@ def patch_plugin_build(px4_dir: Path) -> None:
 
 def patch_bridge_build(px4_dir: Path) -> None:
     path = px4_dir / "src/modules/simulation/gz_bridge/CMakeLists.txt"
-    replace_once(
-        path,
-        "\t\tDEPENDS\n\t\t\tmixer_module\n",
-        "\t\tDEPENDS\n\t\t\tbattery\n\t\t\tmixer_module\n",
-        "\t\t\tbattery\n",
-    )
+    dependency = "\t\t\tbattery\n"
+    if dependency in path.read_text():
+        return
+
+    # Newer PX4 revisions add driver dependencies before mixer_module. Anchor
+    # on the dependency line itself instead of requiring an exact DEPENDS block.
+    mixer_dependency = "\t\t\tmixer_module\n"
+    text = path.read_text()
+    if text.count(mixer_dependency) != 1:
+        raise RuntimeError(
+            f"Cannot find a unique mixer_module dependency in {path}"
+        )
+    path.write_text(text.replace(mixer_dependency, dependency + mixer_dependency, 1))
 
 
 def patch_bridge_header(px4_dir: Path) -> None:

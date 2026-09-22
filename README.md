@@ -137,7 +137,7 @@ xhost +local:docker
 Chạy riêng giao diện trong container từ một terminal host khác:
 
 ```bash
-docker exec -it sw-uav bash -lc 'cd /app && python src/app.py'
+docker exec -it sw-uav zsh
 ```
 
 Hoặc chạy toàn bộ mô phỏng bằng script điều phối trên host:
