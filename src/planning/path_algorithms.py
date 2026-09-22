@@ -1,5 +1,6 @@
 import math
 import random
+import statistics
 import numpy as np
 from scipy.spatial import ConvexHull
 from shapely.geometry import LineString, Polygon as ShapelyPolygon
@@ -83,26 +84,37 @@ def find_zigzag_path(points, uav_init_point):
     return final_path, start_point
 
 def find_path_0(points, start, turn_threshold=math.pi/6):
-    unvisited = [p for p in points if p != start]
+    unvisited = [
+        (p, latlon_to_xy(start[0], start[1], p[0], p[1]))
+        for p in points if p != start
+    ]
     path = [start]
-    curr = start
+    curr_xy = (0.0, 0.0)
     last_dir = None
+
+    nearest_spacing = []
+    for i, (_, point_xy) in enumerate(unvisited):
+        distances = [
+            distance(point_xy, other_xy)
+            for j, (_, other_xy) in enumerate(unvisited)
+            if i != j and distance(point_xy, other_xy) > 0
+        ]
+        if distances:
+            nearest_spacing.append(min(distances))
+    turn_weight = 4 * statistics.median(nearest_spacing) if nearest_spacing else 0.0
+
     while unvisited:
-        if last_dir is None:
-            candidates = unvisited[:]
-        else:
-            no_turn = []
-            for p in unvisited:
-                new_dir = (p[0]-curr[0], p[1]-curr[1])
-                angle = angle_between(last_dir, new_dir)
-                if angle <= turn_threshold:
-                    no_turn.append(p)
-            candidates = no_turn if no_turn else unvisited
-        best_pt = min(candidates, key=lambda p: distance(p, curr))
-        best_dir = (best_pt[0]-curr[0], best_pt[1]-curr[1])
+        def travel_cost(candidate):
+            _, point_xy = candidate
+            new_dir = (point_xy[0] - curr_xy[0], point_xy[1] - curr_xy[1])
+            angle = angle_between(last_dir, new_dir) if last_dir is not None else 0.0
+            return distance(point_xy, curr_xy) + turn_weight * max(0.0, angle - turn_threshold)
+
+        best_pt, best_xy = min(unvisited, key=travel_cost)
+        best_dir = (best_xy[0] - curr_xy[0], best_xy[1] - curr_xy[1])
         path.append(best_pt)
-        unvisited.remove(best_pt)
-        curr = best_pt
+        unvisited.remove((best_pt, best_xy))
+        curr_xy = best_xy
         last_dir = best_dir
     return path
 
@@ -219,162 +231,230 @@ def aco_path(points, start, ants=20, iterations=50, alpha=1, beta=3, rho=0.1, Q=
     best_path_points = [all_points[i] for i in best_path[1:]]
     return best_path_points
 
+def _ga_crossover(parent_1, parent_2):
+    """Cross over waypoint indices so equal coordinates remain distinct visits."""
+    start_idx, end_idx = sorted(random.sample(range(len(parent_1)), 2))
+    child = [None] * len(parent_1)
+    child[start_idx:end_idx + 1] = parent_1[start_idx:end_idx + 1]
+    used = set(child[start_idx:end_idx + 1])
+    remaining = (index for index in parent_2 if index not in used)
+    for i in range(len(child)):
+        if child[i] is None:
+            child[i] = next(remaining)
+    return child
+
+
+def _route_cost(route, xy_points, turn_weight=0.0):
+    cost = 0.0
+    current = (0.0, 0.0)
+    previous_direction = None
+    for index in route:
+        point = xy_points[index]
+        direction = (point[0] - current[0], point[1] - current[1])
+        length = math.hypot(*direction)
+        cost += length
+        if turn_weight and previous_direction is not None and length:
+            cost += turn_weight * angle_between(previous_direction, direction)
+        if length:
+            previous_direction = direction
+        current = point
+    return cost
+
+
+def _ga_grid_spacing(xy_points):
+    nearest_distances = []
+    for i, point in enumerate(xy_points):
+        nearest = float('inf')
+        for j, other in enumerate(xy_points):
+            if i != j:
+                gap = distance(point, other)
+                if 0 < gap < nearest:
+                    nearest = gap
+        if nearest < float('inf'):
+            nearest_distances.append(nearest)
+    return statistics.median(nearest_distances) if nearest_distances else 0.0
+
+
+def _seed_survey_routes(points, xy_points):
+    """Start the search with local and survey-row routes as well as random routes."""
+    unvisited = set(range(len(points)))
+    current = (0.0, 0.0)
+    nearest_route = []
+    while unvisited:
+        index = min(unvisited, key=lambda i: (distance(current, xy_points[i]), i))
+        nearest_route.append(index)
+        unvisited.remove(index)
+        current = xy_points[index]
+
+    two_opt_route = nearest_route[:]
+    improved = True
+    while improved:
+        improved = False
+        for i in range(len(two_opt_route) - 1):
+            before = (0.0, 0.0) if i == 0 else xy_points[two_opt_route[i - 1]]
+            first = xy_points[two_opt_route[i]]
+            for j in range(i + 1, len(two_opt_route)):
+                last = xy_points[two_opt_route[j]]
+                after = xy_points[two_opt_route[j + 1]] if j + 1 < len(two_opt_route) else None
+                old = distance(before, first) + (distance(last, after) if after is not None else 0)
+                new = distance(before, last) + (distance(first, after) if after is not None else 0)
+                if new + 1e-6 < old:
+                    two_opt_route[i:j + 1] = reversed(two_opt_route[i:j + 1])
+                    improved = True
+
+    routes = [two_opt_route, nearest_route]
+    rows = _split_zigzag_rows(points)
+    row_indices = []
+    offset = 0
+    for row in rows:
+        row_indices.append(list(range(offset, offset + len(row))))
+        offset += len(row)
+    if offset == len(points):
+        for start_row in range(len(row_indices)):
+            for prefer_forward in (True, False):
+                sequence = _zigzag_row_sequence(len(row_indices), start_row, prefer_forward)
+                for reverse_first in (False, True):
+                    routes.append(_zigzag_candidate_from_rows(row_indices, sequence, reverse_first))
+    return routes
+
+
+def _simplify_collinear_route(route, xy_points):
+    """Remove only intermediate points lying on the same flown segment."""
+    simplified = []
+    for i, index in enumerate(route):
+        if i + 1 < len(route):
+            before = (0.0, 0.0) if not simplified else xy_points[simplified[-1]]
+            point = xy_points[index]
+            after = xy_points[route[i + 1]]
+            segment = (after[0] - before[0], after[1] - before[1])
+            segment_length_sq = segment[0] ** 2 + segment[1] ** 2
+            if segment_length_sq > 0:
+                position = ((point[0] - before[0]) * segment[0] +
+                            (point[1] - before[1]) * segment[1]) / segment_length_sq
+                if 0 < position < 1:
+                    projected = (before[0] + position * segment[0], before[1] + position * segment[1])
+                    if distance(point, projected) <= 0.02:
+                        continue
+        simplified.append(index)
+    return simplified
+
+
 def ga_path(points, start, pop_size=50, generations=300, mutation_rate=0.1, elite_size=5):
+    if len(points) < 2 or pop_size < 2:
+        return points.copy()
+
+    xy_points = [latlon_to_xy(start[0], start[1], p[0], p[1]) for p in points]
+    indices = list(range(len(points)))
+    elite_count = min(max(2, elite_size), pop_size)
+
     def total_distance(route):
-        dist = 0
-        curr = start
-        for p in route:
-            dist += distance(curr, p)
-            curr = p
-        return dist
+        return _route_cost(route, xy_points)
 
-    population = []
-    for _ in range(pop_size):
-        individual = points[:]
-        random.shuffle(individual)
-        population.append(individual)
-
-    def selection(pop):
-        ranked = sorted(pop, key=lambda r: total_distance(r))
-        return ranked[:elite_size]
-
-    def crossover(p1, p2):
-        a, b = sorted(random.sample(range(len(p1)), 2))
-        child = [None]*len(p1)
-        child[a:b] = p1[a:b]
-        fill = [x for x in p2 if x not in child]
-        idx = 0
-        for i in range(len(p1)):
-            if child[i] is None:
-                child[i] = fill[idx]
-                idx += 1
-        return child
-
-    def mutate(route):
-        for i in range(len(route)):
-            if random.random() < mutation_rate:
-                j = random.randint(0, len(route)-1)
-                route[i], route[j] = route[j], route[i]
-        return route
-
-    best_route = None
-    best_dist = float('inf')
+    population = sorted(_seed_survey_routes(points, xy_points), key=total_distance)[:pop_size]
+    while len(population) < pop_size:
+        population.append(random.sample(indices, len(indices)))
+    best_route = min(population, key=total_distance)[:]
+    best_dist = total_distance(best_route)
 
     for _ in range(generations):
-        selected = selection(population)
+        selected = sorted(population, key=total_distance)[:elite_count]
         new_pop = selected[:]
         while len(new_pop) < pop_size:
-            p1, p2 = random.sample(selected, 2)
-            child = crossover(p1, p2)
-            child = mutate(child)
+            parent_1, parent_2 = random.sample(selected, 2)
+            child = _ga_crossover(parent_1, parent_2)
+            for i in range(len(child)):
+                if random.random() < mutation_rate:
+                    j = random.randrange(len(child))
+                    child[i], child[j] = child[j], child[i]
             new_pop.append(child)
         population = new_pop
 
-        curr_best = min(population, key=lambda r: total_distance(r))
-        curr_dist = total_distance(curr_best)
-        if curr_dist < best_dist:
-            best_dist = curr_dist
-            best_route = curr_best[:]
+        current_best = min(population, key=total_distance)
+        current_dist = total_distance(current_best)
+        if current_dist < best_dist:
+            best_dist = current_dist
+            best_route = current_best[:]
 
-    return best_route
+    return [points[index] for index in _simplify_collinear_route(best_route, xy_points)]
 
 def abc_path(points, start, colony_size=30, limit=20, iterations=100):
     n = len(points)
+    if n < 2 or colony_size < 1:
+        return points.copy()
 
-    def total_distance(route):
-        dist = 0
-        curr = start
-        for p in route:
-            dist += distance(curr, p)
-            curr = p
-        return dist
+    xy_points = [latlon_to_xy(start[0], start[1], p[0], p[1]) for p in points]
+    indices = list(range(n))
+    food_sources = sorted(_seed_survey_routes(points, xy_points),
+                          key=lambda route: _route_cost(route, xy_points))[:min(3, colony_size)]
+    while len(food_sources) < colony_size:
+        food_sources.append(random.sample(indices, n))
+    costs = [_route_cost(route, xy_points) for route in food_sources]
+    trials = [0] * colony_size
+    best_index = min(range(colony_size), key=lambda i: costs[i])
+    best_route = food_sources[best_index][:]
+    best_cost = costs[best_index]
 
-    food_sources = [random.sample(points, n) for _ in range(colony_size)]
-    fitness = [1 / (1 + total_distance(p)) for p in food_sources]
-    trial = [0] * colony_size
+    def explore(source_index):
+        nonlocal best_route, best_cost
+        candidate = food_sources[source_index][:]
+        first, last = sorted(random.sample(range(n), 2))
+        if random.random() < 0.5:
+            candidate[first:last + 1] = reversed(candidate[first:last + 1])
+        else:
+            candidate[first], candidate[last] = candidate[last], candidate[first]
+        candidate_cost = _route_cost(candidate, xy_points)
+        if candidate_cost + 1e-8 < costs[source_index]:
+            food_sources[source_index] = candidate
+            costs[source_index] = candidate_cost
+            trials[source_index] = 0
+            if candidate_cost < best_cost:
+                best_route = candidate[:]
+                best_cost = candidate_cost
+        else:
+            trials[source_index] += 1
 
-    best_route = min(food_sources, key=lambda r: total_distance(r))
-    best_dist = total_distance(best_route)
-
-    for it in range(iterations):
+    for _ in range(iterations):
         for i in range(colony_size):
-            k = random.choice([x for x in range(colony_size) if x != i])
-            new_solution = food_sources[i][:]
-            a, b = random.sample(range(n), 2)
-            new_solution[a], new_solution[b] = new_solution[b], new_solution[a]
-            if total_distance(new_solution) < total_distance(food_sources[i]):
-                food_sources[i] = new_solution
-                trial[i] = 0
-            else:
-                trial[i] += 1
+            explore(i)
 
-        prob = [f / sum(fitness) for f in fitness]
-        for i in range(colony_size):
-            if random.random() < prob[i]:
-                k = random.choice([x for x in range(colony_size) if x != i])
-                new_solution = food_sources[i][:]
-                a, b = random.sample(range(n), 2)
-                new_solution[a], new_solution[b] = new_solution[b], new_solution[a]
-                if total_distance(new_solution) < total_distance(food_sources[i]):
-                    food_sources[i] = new_solution
-                    trial[i] = 0
-                else:
-                    trial[i] += 1
+        fitness = [1 / (1 + cost) for cost in costs]
+        for _ in range(colony_size):
+            selected = random.choices(range(colony_size), weights=fitness, k=1)[0]
+            explore(selected)
 
         for i in range(colony_size):
-            if trial[i] > limit:
-                food_sources[i] = random.sample(points, n)
-                trial[i] = 0
+            if trials[i] >= limit:
+                food_sources[i] = random.sample(indices, n)
+                costs[i] = _route_cost(food_sources[i], xy_points)
+                trials[i] = 0
 
-        fitness = [1 / (1 + total_distance(p)) for p in food_sources]
-        curr_best = min(food_sources, key=lambda r: total_distance(r))
-        curr_dist = total_distance(curr_best)
-        if curr_dist < best_dist:
-            best_dist = curr_dist
-            best_route = curr_best[:]
-
-        print(f"ABC Iter {it+1}/{iterations}: best distance = {best_dist:.3f}")
-
-    return best_route
+    return [points[index] for index in _simplify_collinear_route(best_route, xy_points)]
 
 def ga_path_with_turns(points, start, pop_size=50, generations=200, mutation_rate=0.1, elite_size=5):
+    if len(points) < 2 or pop_size < 2:
+        return points.copy()
+
+    xy_points = [latlon_to_xy(start[0], start[1], p[0], p[1]) for p in points]
+    # A large turn should cost several grid steps so survey rows stay intact.
+    turn_weight = 4 * _ga_grid_spacing(xy_points)
+    indices = list(range(len(points)))
+    elite_count = min(max(2, elite_size), pop_size)
+
     def total_cost(route):
-        cost = 0
-        curr = start
-        prev_vector = None
-        for p in route:
-            cost += distance(curr, p)
-            vector = (p[0]-curr[0], p[1]-curr[1])
-            if prev_vector:
-                dot = prev_vector[0]*vector[0] + prev_vector[1]*vector[1]
-                mag = math.hypot(*prev_vector) * math.hypot(*vector)
-                if mag > 0:
-                    cos_angle = dot / mag
-                    if abs(cos_angle) < 0.99:
-                        cost += 0.1 * distance(curr, p)
-            prev_vector = vector
-            curr = p
-        return cost
-    
-    population = [random.sample(points, len(points)) for _ in range(pop_size)]
-    
-    best_route = None
-    best_cost_val = float('inf')
-    
+        return _route_cost(route, xy_points, turn_weight)
+
+    population = sorted(_seed_survey_routes(points, xy_points), key=total_cost)[:pop_size]
+    while len(population) < pop_size:
+        population.append(random.sample(indices, len(indices)))
+    best_route = min(population, key=total_cost)[:]
+    best_cost_val = total_cost(best_route)
+
     for _ in range(generations):
         ranked = sorted(population, key=total_cost)
-        new_pop = ranked[:elite_size]
+        new_pop = ranked[:elite_count]
         while len(new_pop) < pop_size:
-            p1, p2 = random.sample(ranked[:elite_size], 2)
-            a, b = sorted(random.sample(range(len(p1)), 2))
-            child = [None]*len(p1)
-            child[a:b] = p1[a:b]
-            fill = [x for x in p2 if x not in child]
-            idx = 0
-            for i in range(len(child)):
-                if child[i] is None:
-                    child[i] = fill[idx]
-                    idx += 1
+            parent_1, parent_2 = random.sample(ranked[:elite_count], 2)
+            child = _ga_crossover(parent_1, parent_2)
             if random.random() < mutation_rate:
                 i, j = random.sample(range(len(child)), 2)
                 child[i], child[j] = child[j], child[i]
@@ -385,8 +465,8 @@ def ga_path_with_turns(points, start, pop_size=50, generations=200, mutation_rat
         if curr_cost < best_cost_val:
             best_cost_val = curr_cost
             best_route = curr_best[:]
-    
-    return best_route
+
+    return [points[index] for index in _simplify_collinear_route(best_route, xy_points)]
 
 def astar_path_with_turns(points, start):
     unvisited = set(p for p in points if p != start)
