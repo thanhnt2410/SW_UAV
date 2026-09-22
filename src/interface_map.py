@@ -38,7 +38,6 @@ class Map(Interface):
     # Map configuration parameters
     noArea = 5
     drone_num = 5
-    gridSize = 10  # meters
 
     # State tracking
     drone_path_enabled = False
@@ -56,6 +55,7 @@ class Map(Interface):
         """Initialize the map interface"""
         print("[startup] initializing Interface", file=sys.stderr, flush=True)
         Interface.__init__(self, config=config)
+        self.gridSize = config.GRID_SPACING_M
         print("[startup] initializing maps", file=sys.stderr, flush=True)
         self._init_map()
         print("[startup] initializing map events", file=sys.stderr, flush=True)
@@ -924,7 +924,7 @@ class Map(Interface):
         """Update the grid size parameter from the UI input"""
         try:
             value = self.ui.gridSize_line_edit.text().strip()
-            new_value = int(value)
+            new_value = float(value)
             if new_value <= 0:
                 raise ValueError("Grid size must be positive")
                 
@@ -938,7 +938,7 @@ class Map(Interface):
         except ValueError as e:
             logger.error(f"Invalid value for grid size: {e}")
             self.popup_msg(
-                f"Invalid value: {value}. Grid size must be a positive integer.",
+                f"Invalid value: {value}. Grid size must be a positive number.",
                 src_msg="Set grid size",
                 type_msg="error"
             )

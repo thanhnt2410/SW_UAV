@@ -7,6 +7,14 @@ general:
   max_uav_count: 6
   rescue_uav_index: 6
 
+# Cấu hình tạo waypoint và đánh giá vùng quét của camera.
+mission_planning:
+  grid_spacing_m: 10.0
+  camera_footprint_width_m: 20.0
+  # FOV tương đương footprint 20 x 20 m ở độ cao 13 m; hiện chưa được sử dụng.
+  horizontal_fov_deg: 75.14
+  vertical_fov_deg: 75.14
+
 # Các tham số pin PX4 được tự động áp dụng qua MAVSDK sau khi kết nối.
 # Có thể cấu hình riêng theo operation_mode để tránh dùng nhầm thông số
 # pin mô phỏng cho UAV thật. Các giá trị dưới đây tương ứng pin LiPo 4S
@@ -16,7 +24,7 @@ px4_parameters:
     BAT1_SOURCE: 0
     BAT1_N_CELLS: 4
     BAT1_CAPACITY: 4500.0
-    BAT1_V_CHARGED: 4.05
+    BAT1_V_CHARGED: 4.2
     BAT1_V_EMPTY: 3.60
     BAT1_R_INTERNAL: 0.005
   real: {}

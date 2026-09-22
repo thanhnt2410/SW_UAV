@@ -1848,11 +1848,13 @@ class MainController:
         for row in range(self.ui.tableWidgetAlgorithmComparison.rowCount()):
             for col in range(1, self.ui.tableWidgetAlgorithmComparison.columnCount()):
                 self.ui.tableWidgetAlgorithmComparison.setItem(row, col, QtWidgets.QTableWidgetItem(""))
+        default_grid_spacing_m = self.config.GRID_SPACING_M
+        camera_footprint_width_m = self.config.CAMERA_FOOTPRINT_WIDTH_M
         try:
             grid_size = float(self.ui.gridSize_line_edit.text()) # Lấy tạm grid size từ tab map
-            if grid_size <= 0: grid_size = 10.0
+            if grid_size <= 0: grid_size = default_grid_spacing_m
         except ValueError:
-            grid_size = 10.0
+            grid_size = default_grid_spacing_m
 
         # Lấy danh sách thuật toán được chọn
         selected_algos = []
@@ -2132,7 +2134,7 @@ class MainController:
                         analyzer = UAVAnalyzer(
                             area_gps=polygon_vertices,
                             flight_path=path,
-                            footprint_size=20.0,
+                            footprint_size=camera_footprint_width_m,
                         )
                         analysis_result = analyzer.compute_coverage()
 
@@ -2363,7 +2365,7 @@ class MainController:
                 final_analyzer = UAVAnalyzer(
                     area_gps=polygon_vertices,
                     flight_path=final_path,
-                    footprint_size=20.0
+                    footprint_size=camera_footprint_width_m
                 )
 
                 if len(best_overall_path) == 1:

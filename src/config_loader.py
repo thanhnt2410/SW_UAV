@@ -66,6 +66,12 @@ class ConfigLoader:
         self.MAX_UAV_COUNT = self.uav['general']['max_uav_count']
         self.RESCUE_UAV_INDEX = self.uav['general']['rescue_uav_index']
 
+        mission_planning = self.uav['mission_planning']
+        self.GRID_SPACING_M = float(mission_planning['grid_spacing_m'])
+        self.CAMERA_FOOTPRINT_WIDTH_M = float(mission_planning['camera_footprint_width_m'])
+        if self.GRID_SPACING_M <= 0 or self.CAMERA_FOOTPRINT_WIDTH_M <= 0:
+            raise ValueError("Mission planning distances must be greater than zero")
+
         px4_parameters_by_mode = self.uav.get('px4_parameters', {})
         self.PX4_PARAMETERS = dict(px4_parameters_by_mode.get(self.MODE, {}) or {})
 
